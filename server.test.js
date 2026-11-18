@@ -3,7 +3,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { execFile } = require('node:child_process');
 const { once } = require('node:events');
+const { promisify } = require('node:util');
 const { BIP32Factory } = require('bip32');
 const ecc = require('tiny-secp256k1');
 const { deriveSecpAddress, isValidSolanaAddress } = require('./wallet');
@@ -22,10 +24,52 @@ const {
 } = require('./server');
 
 const bip32 = BIP32Factory(ecc);
+const execFileAsync = promisify(execFile);
 
 test.after(() => {
   closeDatabase();
   fs.rmSync(testDataDirectory, { recursive: true, force: true });
+});
+
+test('Vercel cold start exports Express and reports missing persistent storage without crashing', async () => {
+  const script = `
+    const app = require('./server');
+    const server = app.listen(0, '127.0.0.1', async () => {
+      try {
+        const baseUrl = 'http://127.0.0.1:' + server.address().port;
+        const health = await fetch(baseUrl + '/api/health');
+        const healthBody = await health.json();
+        const authPage = await fetch(baseUrl + '/');
+        const authApi = await fetch(baseUrl + '/api/auth/session');
+        if (typeof app !== 'function'
+          || health.status !== 503
+          || healthBody.status !== 'degraded'
+          || healthBody.persistentStorage !== 'unconfigured'
+          || authPage.status !== 200
+          || authApi.status !== 503) {
+          throw new Error('Unexpected Vercel cold-start responses.');
+        }
+      } catch (error) {
+        console.error(error.message);
+        process.exitCode = 1;
+      } finally {
+        server.close(async () => app.closeDatabase());
+      }
+    });
+  `;
+  const env = {
+    ...process.env,
+    VERCEL: '1',
+    DATABASE_URL: '',
+    POSTGRES_URL: '',
+  };
+  const { stdout, stderr } = await execFileAsync(process.execPath, ['-e', script], {
+    cwd: __dirname,
+    env,
+    timeout: 30_000,
+  });
+  assert.equal(stderr, '');
+  assert.equal(stdout, '');
 });
 
 test('reports whether the Shieldz API key is configured without exposing it', () => {

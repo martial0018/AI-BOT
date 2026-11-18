@@ -6,7 +6,6 @@ const { promisify } = require('node:util');
 const express = require('express');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit').rateLimit;
-const Database = require('better-sqlite3');
 const QRCode = require('qrcode');
 const { getSweepReadiness } = require('./sweeps');
 const { deriveSecpAddress } = require('./wallet');
@@ -29,13 +28,64 @@ const publicPages = new Map([
 ]);
 
 const app = express();
-if (process.env.TRUST_PROXY === 'true') app.set('trust proxy', 1);
-const databasePath = process.env.DATABASE_PATH || path.join(__dirname, 'data', 'deposits.sqlite');
-require('node:fs').mkdirSync(path.dirname(databasePath), { recursive: true });
-const database = new Database(databasePath);
-database.pragma('journal_mode = WAL');
-database.pragma('busy_timeout = 5000');
-database.exec(`
+const isVercelRuntime = process.env.VERCEL === '1';
+if (process.env.TRUST_PROXY === 'true' || isVercelRuntime) app.set('trust proxy', 1);
+const databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+let sqliteDatabase;
+let postgresPool;
+let databaseInitError;
+let databaseReady = Promise.resolve();
+
+const postgresSchema = `
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    password_salt TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at BIGINT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS sessions_expires_at ON sessions(expires_at);
+  CREATE TABLE IF NOT EXISTS wallet_address_counters (
+    derivation_family TEXT PRIMARY KEY,
+    next_index BIGINT NOT NULL CHECK (next_index >= 0)
+  );
+  CREATE TABLE IF NOT EXISTS wallet_deposits (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id),
+    asset TEXT NOT NULL,
+    network TEXT NOT NULL,
+    address TEXT NOT NULL,
+    derivation_family TEXT NOT NULL,
+    derivation_index BIGINT NOT NULL CHECK (derivation_index >= 0),
+    status TEXT NOT NULL CHECK (status IN ('awaiting_payment', 'confirming', 'confirmed')),
+    created_at TEXT NOT NULL,
+    UNIQUE (derivation_family, derivation_index),
+    UNIQUE (network, address)
+  )
+`;
+
+if (databaseUrl) {
+  const { Pool } = require('pg');
+  postgresPool = new Pool({ connectionString: databaseUrl, max: 5, connectionTimeoutMillis: 5000 });
+  databaseReady = postgresPool.query(postgresSchema).catch(error => {
+    databaseInitError = error;
+    console.error('Persistent PostgreSQL initialization failed.');
+  });
+} else if (!isVercelRuntime) {
+  const Database = require('better-sqlite3');
+  const databasePath = process.env.DATABASE_PATH || path.join(__dirname, 'data', 'deposits.sqlite');
+  require('node:fs').mkdirSync(path.dirname(databasePath), { recursive: true });
+  sqliteDatabase = new Database(databasePath);
+  sqliteDatabase.pragma('journal_mode = WAL');
+  sqliteDatabase.pragma('busy_timeout = 5000');
+  sqliteDatabase.exec(`
   CREATE TABLE IF NOT EXISTS shieldz_deposits (
     id TEXT PRIMARY KEY,
     invoice_id TEXT NOT NULL UNIQUE,
@@ -63,6 +113,10 @@ database.exec(`
     created_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS sessions_expires_at ON sessions(expires_at);
+  CREATE TABLE IF NOT EXISTS wallet_address_counters (
+    derivation_family TEXT PRIMARY KEY,
+    next_index INTEGER NOT NULL CHECK (next_index >= 0)
+  );
   CREATE TABLE IF NOT EXISTS wallet_deposits (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id),
@@ -76,19 +130,60 @@ database.exec(`
     UNIQUE (derivation_family, derivation_index),
     UNIQUE (network, address)
   );
-`);
-database.pragma('foreign_keys = ON');
+  `);
+  sqliteDatabase.pragma('foreign_keys = ON');
+  sqliteDatabase.exec(`
+    INSERT OR IGNORE INTO wallet_address_counters (derivation_family, next_index)
+    SELECT derivation_family, MAX(derivation_index) + 1
+    FROM wallet_deposits
+    GROUP BY derivation_family
+  `);
+  databaseReady = Promise.resolve();
+}
+
+function isDatabaseConfigured() {
+  return Boolean(sqliteDatabase || postgresPool);
+}
+
+async function ensureDatabaseReady() {
+  await databaseReady;
+  if (!isDatabaseConfigured()) {
+    throw new Error('Persistent database is not configured. Add DATABASE_URL in the deployment environment.');
+  }
+  if (databaseInitError) throw new Error('Persistent database is unavailable.');
+}
+
+function postgresPlaceholders(statement) {
+  let index = 0;
+  return statement.replace(/\?/g, () => `$${++index}`);
+}
+
+async function databaseGet(statement, parameters = []) {
+  await ensureDatabaseReady();
+  if (postgresPool) {
+    const result = await postgresPool.query(postgresPlaceholders(statement), parameters);
+    return result.rows[0];
+  }
+  return sqliteDatabase.prepare(statement).get(...parameters);
+}
+
+async function databaseRun(statement, parameters = []) {
+  await ensureDatabaseReady();
+  if (postgresPool) return postgresPool.query(postgresPlaceholders(statement), parameters);
+  return sqliteDatabase.prepare(statement).run(...parameters);
+}
+
 const depositColumns = new Set(
-  database.pragma('table_info(shieldz_deposits)').map(column => column.name)
+  sqliteDatabase?.pragma('table_info(shieldz_deposits)').map(column => column.name) || []
 );
 if (!depositColumns.has('settlement_asset')) {
-  database.exec("ALTER TABLE shieldz_deposits ADD COLUMN settlement_asset TEXT NOT NULL DEFAULT 'USDT'");
+  sqliteDatabase?.exec("ALTER TABLE shieldz_deposits ADD COLUMN settlement_asset TEXT NOT NULL DEFAULT 'USDT'");
 }
 if (!depositColumns.has('settlement_network')) {
-  database.exec("ALTER TABLE shieldz_deposits ADD COLUMN settlement_network TEXT NOT NULL DEFAULT 'base'");
+  sqliteDatabase?.exec("ALTER TABLE shieldz_deposits ADD COLUMN settlement_network TEXT NOT NULL DEFAULT 'base'");
 }
 if (!depositColumns.has('settlement_chain')) {
-  database.exec("ALTER TABLE shieldz_deposits ADD COLUMN settlement_chain TEXT NOT NULL DEFAULT 'BASE'");
+  sqliteDatabase?.exec("ALTER TABLE shieldz_deposits ADD COLUMN settlement_chain TEXT NOT NULL DEFAULT 'BASE'");
 }
 
 const depositOptionCodes = {
@@ -139,7 +234,7 @@ function getCookieValue(header, name) {
 
 function setSessionCookie(res, token) {
   const maxAge = 30 * 24 * 60 * 60;
-  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  const secure = process.env.NODE_ENV === 'production' || isVercelRuntime ? '; Secure' : '';
   res.setHeader(
     'Set-Cookie',
     `cv_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure}`
@@ -147,7 +242,7 @@ function setSessionCookie(res, token) {
 }
 
 function clearSessionCookie(res) {
-  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  const secure = process.env.NODE_ENV === 'production' || isVercelRuntime ? '; Secure' : '';
   res.setHeader('Set-Cookie', `cv_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure}`);
 }
 
@@ -167,8 +262,28 @@ function requireSameOrigin(req, res, next) {
 }
 
 function requireUser(req, res, next) {
+  if (req.databaseUnavailable || !isDatabaseConfigured() || databaseInitError) {
+    return res.status(503).json({
+      error: isDatabaseConfigured()
+        ? 'Persistent database is unavailable. Check the DATABASE_URL deployment setting.'
+        : 'Persistent database is not configured. Add DATABASE_URL to the Vercel project settings.',
+    });
+  }
   if (!req.user) return res.status(401).json({ error: 'Sign in to continue.' });
   return next();
+}
+
+function requirePersistentDatabase(req, res, next) {
+  if (req.databaseUnavailable) {
+    return res.status(503).json({
+      error: 'Persistent database is unavailable. Check the DATABASE_URL deployment setting.',
+    });
+  }
+  ensureDatabaseReady().then(next).catch(() => {
+    res.status(503).json({
+      error: 'Persistent database is unavailable. Configure DATABASE_URL in the deployment settings.',
+    });
+  });
 }
 
 async function createPasswordHash(password) {
@@ -199,7 +314,7 @@ async function verifyPassword(password, saltHex, hashHex) {
   return crypto.timingSafeEqual(actual, expected);
 }
 
-function createDepositAddress({ userId, asset, network, env = process.env }) {
+async function createDepositAddress({ userId, asset, network, env = process.env }) {
   const networkCode = depositOptionCodes[`${asset}:${network}`];
   const familyConfig = depositDerivationFamilies[networkCode];
   if (!networkCode || !familyConfig) throw new Error('Unsupported asset and network.');
@@ -207,12 +322,59 @@ function createDepositAddress({ userId, asset, network, env = process.env }) {
     throw new Error(`Configure ${familyConfig.envKey} before creating deposit addresses.`);
   }
 
-  const allocate = database.transaction(() => {
-    const row = database.prepare(`
-      SELECT COALESCE(MAX(derivation_index), -1) + 1 AS nextIndex
-      FROM wallet_deposits WHERE derivation_family = ?
+  if (postgresPool) {
+    await ensureDatabaseReady();
+    const client = await postgresPool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows: [row] } = await client.query(`
+        INSERT INTO wallet_address_counters (derivation_family, next_index)
+        VALUES ($1, 1)
+        ON CONFLICT (derivation_family)
+        DO UPDATE SET next_index = wallet_address_counters.next_index + 1
+        RETURNING next_index - 1 AS "nextIndex"
+      `, [familyConfig.family]);
+      const index = Number(row.nextIndex);
+      if (!Number.isSafeInteger(index) || index >= 0x80000000) {
+        throw new Error('Deposit address index limit reached.');
+      }
+
+      const address = deriveSecpAddress(asset, networkCode, index, env);
+      const id = crypto.randomUUID();
+      const createdAt = new Date().toISOString();
+      await client.query(`
+        INSERT INTO wallet_deposits (
+          id, user_id, asset, network, address, derivation_family,
+          derivation_index, status, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'awaiting_payment', $8)
+      `, [id, userId, asset, network, address, familyConfig.family, index, createdAt]);
+      await client.query('COMMIT');
+      return { id, asset, network, address, status: 'awaiting_payment', createdAt };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  const allocate = sqliteDatabase.transaction(() => {
+    let row = sqliteDatabase.prepare(`
+      SELECT next_index AS nextIndex
+      FROM wallet_address_counters WHERE derivation_family = ?
     `).get(familyConfig.family);
-    const index = row.nextIndex;
+    if (!row) {
+      sqliteDatabase.prepare(`
+        INSERT INTO wallet_address_counters (derivation_family, next_index) VALUES (?, 1)
+      `).run(familyConfig.family);
+      row = { nextIndex: 0 };
+    } else {
+      sqliteDatabase.prepare(`
+        UPDATE wallet_address_counters SET next_index = next_index + 1
+        WHERE derivation_family = ?
+      `).run(familyConfig.family);
+    }
+    const index = Number(row.nextIndex);
     if (!Number.isSafeInteger(index) || index >= 0x80000000) {
       throw new Error('Deposit address index limit reached.');
     }
@@ -220,7 +382,7 @@ function createDepositAddress({ userId, asset, network, env = process.env }) {
     const address = deriveSecpAddress(asset, networkCode, index, env);
     const id = crypto.randomUUID();
     const createdAt = new Date().toISOString();
-    database.prepare(`
+    sqliteDatabase.prepare(`
       INSERT INTO wallet_deposits (
         id, user_id, asset, network, address, derivation_family,
         derivation_index, status, created_at
@@ -256,20 +418,30 @@ app.use('/api/', rateLimit({
   standardHeaders: 'draft-8',
   legacyHeaders: false,
 }));
-app.use((req, _res, next) => {
-  const token = getCookieValue(req.get('cookie'), 'cv_session');
-  if (token && /^[A-Za-z0-9_-]{40,}$/.test(token)) {
-    const session = database.prepare(`
-      SELECT users.id, users.email, users.name
-      FROM sessions JOIN users ON users.id = sessions.user_id
-      WHERE sessions.token_hash = ? AND sessions.expires_at > ?
-    `).get(hashSessionToken(token), Date.now());
-    if (session) req.user = session;
+app.use(async (req, _res, next) => {
+  try {
+    await databaseReady;
+    if (databaseInitError) {
+      req.databaseUnavailable = true;
+      return next();
+    }
+    const token = getCookieValue(req.get('cookie'), 'cv_session');
+    if (token && /^[A-Za-z0-9_-]{40,}$/.test(token) && isDatabaseConfigured()) {
+      req.user = await databaseGet(`
+        SELECT users.id, users.email, users.name
+        FROM sessions JOIN users ON users.id = sessions.user_id
+        WHERE sessions.token_hash = ? AND sessions.expires_at > ?
+      `, [hashSessionToken(token), Date.now()]);
+    }
+    next();
+  } catch (error) {
+    req.databaseUnavailable = true;
+    console.error('Session lookup failed:', error.message);
+    next();
   }
-  next();
 });
 
-app.post('/api/auth/register', requireSameOrigin, async (req, res) => {
+app.post('/api/auth/register', requireSameOrigin, requirePersistentDatabase, async (req, res) => {
   const { email, name, password, passwordConfirmation } = req.body || {};
   const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
   const normalizedName = typeof name === 'string' ? name.trim() : '';
@@ -290,33 +462,33 @@ app.post('/api/auth/register', requireSameOrigin, async (req, res) => {
   const user = { id: crypto.randomUUID(), email: normalizedEmail, name: normalizedName };
   const createdAt = new Date().toISOString();
   try {
-    database.prepare(`
+    await databaseRun(`
       INSERT INTO users (id, email, name, password_salt, password_hash, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(user.id, user.email, user.name, credentials.salt, credentials.hash, createdAt);
+    `, [user.id, user.email, user.name, credentials.salt, credentials.hash, createdAt]);
   } catch (error) {
-    if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+    if (error.code === 'SQLITE_CONSTRAINT_UNIQUE' || error.code === '23505') {
       return res.status(409).json({ error: 'An account with that email already exists.' });
     }
     throw error;
   }
   const token = crypto.randomBytes(32).toString('base64url');
-  database.prepare(`
+  await databaseRun(`
     INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)
-  `).run(hashSessionToken(token), user.id, Date.now() + 30 * 24 * 60 * 60 * 1000, createdAt);
+  `, [hashSessionToken(token), user.id, Date.now() + 30 * 24 * 60 * 60 * 1000, createdAt]);
   setSessionCookie(res, token);
   return res.status(201).json({ user });
 });
 
-app.post('/api/auth/login', requireSameOrigin, async (req, res) => {
+app.post('/api/auth/login', requireSameOrigin, requirePersistentDatabase, async (req, res) => {
   const { email, password } = req.body || {};
   const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
   if (!normalizedEmail || typeof password !== 'string' || password.length > 128) {
     return res.status(400).json({ error: 'Enter your email and password.' });
   }
-  const account = database.prepare(`
+  const account = await databaseGet(`
     SELECT id, email, name, password_salt, password_hash FROM users WHERE email = ?
-  `).get(normalizedEmail);
+  `, [normalizedEmail]);
   const valid = account
     ? await verifyPassword(password, account.password_salt, account.password_hash)
     : false;
@@ -324,22 +496,26 @@ app.post('/api/auth/login', requireSameOrigin, async (req, res) => {
 
   const token = crypto.randomBytes(32).toString('base64url');
   const createdAt = new Date().toISOString();
-  database.prepare(`
+  await databaseRun(`
     INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)
-  `).run(hashSessionToken(token), account.id, Date.now() + 30 * 24 * 60 * 60 * 1000, createdAt);
+  `, [hashSessionToken(token), account.id, Date.now() + 30 * 24 * 60 * 60 * 1000, createdAt]);
   setSessionCookie(res, token);
   return res.json({ user: { id: account.id, email: account.email, name: account.name } });
 });
 
-app.get('/api/auth/session', (req, res) => {
+app.get('/api/auth/session', requirePersistentDatabase, (req, res) => {
   if (!req.user) return res.status(401).json({ error: 'Sign in to continue.' });
   res.json({ user: req.user });
 });
 
-app.post('/api/auth/logout', requireSameOrigin, (req, res) => {
+app.post('/api/auth/logout', requireSameOrigin, async (req, res) => {
   const token = getCookieValue(req.get('cookie'), 'cv_session');
   if (token) {
-    database.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashSessionToken(token));
+    try {
+      await databaseRun('DELETE FROM sessions WHERE token_hash = ?', [hashSessionToken(token)]);
+    } catch {
+      return res.status(503).json({ error: 'Could not sign out because the persistent database is unavailable.' });
+    }
   }
   clearSessionCookie(res);
   res.json({ status: 'ok' });
@@ -551,8 +727,21 @@ async function getShieldzInvoice(invoiceId, options = {}) {
   };
 }
 
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', mode: 'self-custody-addresses', monitoring: 'disabled' });
+app.get('/api/health', async (_req, res) => {
+  await databaseReady;
+  const configured = isDatabaseConfigured();
+  const ready = configured && !databaseInitError;
+  res.status(ready ? 200 : 503).json({
+    status: ready ? 'ok' : 'degraded',
+    mode: 'self-custody-addresses',
+    monitoring: 'disabled',
+    persistentStorage: ready ? 'configured' : configured ? 'unavailable' : 'unconfigured',
+    setup: ready
+      ? undefined
+      : configured
+        ? 'Check DATABASE_URL and confirm the PostgreSQL database is reachable.'
+        : 'Configure DATABASE_URL with a persistent PostgreSQL database.',
+  });
 });
 
 app.get('/api/sweeps/readiness', (_req, res) => {
@@ -579,7 +768,7 @@ app.post('/api/deposits/address', requireSameOrigin, requireUser, async (req, re
     return res.status(400).json({ error: 'Choose a supported asset and network.' });
   }
   try {
-    const deposit = createDepositAddress({ userId: req.user.id, asset, network });
+    const deposit = await createDepositAddress({ userId: req.user.id, asset, network });
     const qrCode = await QRCode.toDataURL(deposit.address, {
       errorCorrectionLevel: 'M',
       margin: 1,
@@ -602,11 +791,11 @@ app.post('/api/deposits/address', requireSameOrigin, requireUser, async (req, re
   }
 });
 
-app.get('/api/deposits/address/:id', requireUser, (req, res) => {
-  const deposit = database.prepare(`
+app.get('/api/deposits/address/:id', requireUser, async (req, res) => {
+  const deposit = await databaseGet(`
     SELECT id, asset, network, address, status, created_at AS createdAt
     FROM wallet_deposits WHERE id = ? AND user_id = ?
-  `).get(req.params.id, req.user.id);
+  `, [req.params.id, req.user.id]);
   if (!deposit) return res.status(404).json({ error: 'Deposit address not found.' });
   return res.json({ ...deposit, monitoringReady: false });
 });
@@ -644,7 +833,8 @@ if (require.main === module) {
 
   function shutdown() {
     server.close(() => {
-      database.close();
+      if (sqliteDatabase) sqliteDatabase.close();
+      if (postgresPool) postgresPool.end();
       process.exit(0);
     });
   }
@@ -652,7 +842,7 @@ if (require.main === module) {
   process.on('SIGTERM', shutdown);
 }
 
-module.exports = {
+module.exports = Object.assign(app, {
   app,
   createShieldzInvoice,
   getShieldzInvoice,
@@ -663,5 +853,8 @@ module.exports = {
   hashSessionToken,
   createPasswordHash,
   verifyPassword,
-  closeDatabase: () => database.close(),
-};
+  closeDatabase: async () => {
+    if (sqliteDatabase) sqliteDatabase.close();
+    if (postgresPool) await postgresPool.end();
+  },
+});
