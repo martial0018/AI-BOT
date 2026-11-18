@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080808">
+  <title>Trading Bots | CryptoVault</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, "Segoe UI", sans-serif;
+      background: #080a09;
+      color: #f5f7f5;
+      font-synthesis: none;
+      --green: #16dc78;
+      --muted: #929b95;
+      --border: #242825;
+      --panel: #101311;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; background: #080a09; }
+    button, input, select { font: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    a { color: inherit; text-decoration: none; }
+    button { color: inherit; cursor: pointer; }
+    .navbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      min-height: 56px;
+      align-items: center;
+      gap: 20px;
+      border-bottom: 1px solid #1a1d1b;
+      background: #080808;
+      padding: 8px 20px;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; color: var(--green); font-size: 18px; font-weight: 700; }
+    .brand-mark {
+      display: grid;
+      width: 34px;
+      height: 34px;
+      place-items: center;
+      border: 1px solid rgba(22,220,120,.35);
+      border-radius: 9px;
+      background: linear-gradient(145deg,#193c29,#101b14);
+      color: #45ef98;
+      font-size: 13px;
+      box-shadow: 0 0 18px rgba(22,220,120,.1);
+    }
+    .nav-spacer { flex: 1; }
+    .nav-links { display: flex; align-items: center; gap: 5px; }
+    .nav-links a, .logout {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: #c4c9c5;
+      font-size: 12px;
+      padding: 9px 10px;
+      white-space: nowrap;
+    }
+    .nav-links a:hover { background: #171a18; color: white; }
+    .nav-links a.active { background: var(--green); color: #04150b; font-weight: 700; }
+    .logout { color: #f08085; }
+    .nav-tools { display: flex; align-items: center; gap: 10px; }
+    .nav-icon, .menu-toggle {
+      display: grid;
+      width: 32px;
+      height: 32px;
+      place-items: center;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: #a7b0aa;
+    }
+    .nav-icon:hover, .menu-toggle:hover { background: #191c1a; color: #fff; }
+    .menu-toggle { display: none; font-size: 18px; }
+    .mobile-menu {
+      position: absolute;
+      top: calc(100% + 6px);
+      right: 12px;
+      left: 12px;
+      display: none;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: #101210;
+      padding: 8px;
+      box-shadow: 0 18px 40px #0009;
+    }
+    .mobile-menu.open { display: grid; }
+    .mobile-menu a { display: flex; gap: 10px; align-items: center; border-radius: 8px; padding: 11px 12px; color: #d3d8d4; }
+    .mobile-menu a.active { background: var(--green); color: #04150b; }
+    .notification-panel {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 20px;
+      width: 280px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: #111412;
+      padding: 16px;
+      box-shadow: 0 18px 40px #0009;
+    }
+    [hidden] { display: none !important; }
+    main { width: min(100% - 48px, 1440px); margin: 0 auto; padding: 34px 0 56px; }
+    .eyebrow { color: #849087; font-size: 11px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+    .hero {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 34px;
+    }
+    h1 { margin: 0; font-size: clamp(28px, 3.6vw, 40px); letter-spacing: -.04em; }
+    .hero p, .section-heading p { margin: 8px 0 0; color: var(--muted); font-size: 14px; }
+    .stats { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+    .stat {
+      min-width: 116px;
+      border: 1px solid #262b27;
+      border-radius: 10px;
+      background: #101311;
+      padding: 12px 15px;
+    }
+    .stat strong { display: block; font-size: 22px; line-height: 1.2; }
+    .stat span { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+    .hero-mark {
+      display: grid;
+      width: 138px;
+      height: 138px;
+      flex: 0 0 auto;
+      place-items: center;
+      border: 1px solid rgba(22,220,120,.15);
+      border-radius: 50%;
+      background: radial-gradient(circle,rgba(22,220,120,.13),rgba(22,220,120,.015) 67%);
+      color: #35e88c;
+      font-size: 44px;
+    }
+    .section-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin: 34px 0 16px; }
+    h2 { margin: 0; font-size: 20px; letter-spacing: -.02em; }
+    .demo-note { color: #a5b1a8; font-size: 11px; }
+    .bot-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
+    .bot-card {
+      border: 1px solid #292e2a;
+      border-radius: 14px;
+      background: linear-gradient(145deg,#111512,#0e100f);
+      padding: 20px;
+      transition: border-color .2s, transform .2s;
+    }
+    .bot-card:hover { transform: translateY(-2px); border-color: #31503c; }
+    .bot-top { display: flex; align-items: start; justify-content: space-between; gap: 14px; }
+    .bot-identity { display: flex; align-items: center; gap: 12px; }
+    .bot-symbol {
+      display: grid;
+      width: 42px;
+      height: 42px;
+      flex: 0 0 auto;
+      place-items: center;
+      border: 1px solid rgba(22,220,120,.18);
+      border-radius: 12px;
+      background: rgba(22,220,120,.08);
+      color: #55e994;
+      font-size: 17px;
+    }
+    .bot-top h3 { margin: 0; font-size: 16px; }
+    .bot-subtitle { margin-top: 5px; color: #879189; font-size: 11px; }
+    .badge {
+      border: 1px solid #31533d;
+      border-radius: 999px;
+      background: rgba(22,220,120,.07);
+      color: #72e8a4;
+      font-size: 10px;
+      padding: 5px 9px;
+      white-space: nowrap;
+    }
+    .status { display: inline-flex; align-items: center; gap: 6px; color: #909b93; font-size: 11px; white-space: nowrap; }
+    .status::before { width: 7px; height: 7px; border-radius: 50%; background: #6b756e; content: ""; }
+    .status.active { color: #5dde91; }
+    .status.active::before { background: #28dc79; box-shadow: 0 0 9px #28dc7966; }
+    .bot-desc { min-height: 42px; margin: 18px 0; color: #aab2ac; font-size: 13px; line-height: 1.6; }
+    .bot-meta { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; border-top: 1px solid #252a26; border-bottom: 1px solid #252a26; padding: 14px 0; }
+    .meta-title { color: #808a83; font-size: 10px; }
+    .meta-value { margin-top: 5px; font-size: 12px; font-weight: 600; }
+    .bot-actions { display: flex; gap: 9px; margin-top: 15px; }
+    .btn {
+      min-height: 38px;
+      border: 1px solid #343a35;
+      border-radius: 8px;
+      background: #191c1a;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 0 14px;
+      transition: background .2s,border-color .2s;
+    }
+    .btn:hover { border-color: #4b5c50; background: #202521; }
+    .btn-primary { flex: 1; border-color: #13d875; background: #13d875; color: #06160c; }
+    .btn-primary:hover { border-color: #45ed94; background: #45ed94; }
+    .btn-running { flex: 1; border-color: #36533f; background: rgba(22,220,120,.08); color: #69e89d; }
+    .footer-note { margin-top: 24px; border: 1px solid #332f22; border-radius: 10px; background: rgba(150,112,29,.07); color: #b7ad92; font-size: 12px; line-height: 1.6; padding: 13px 15px; }
+    .modal-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: #000b; padding: 16px; backdrop-filter: blur(4px); }
+    .modal {
+      position: relative;
+      width: min(100%, 440px);
+      border: 1px solid #303832;
+      border-radius: 15px;
+      background: #111512;
+      padding: 24px;
+      box-shadow: 0 24px 80px #000a;
+    }
+    .modal h2 { padding-right: 35px; }
+    .modal-close { position: absolute; top: 15px; right: 15px; width: 32px; height: 32px; border: 0; border-radius: 7px; background: transparent; color: #9aa39c; }
+    .field { display: grid; gap: 7px; margin-top: 16px; }
+    .field label { color: #aab2ac; font-size: 12px; }
+    .field input, .field select {
+      width: 100%;
+      min-height: 42px;
+      border: 1px solid #303832;
+      border-radius: 8px;
+      outline: none;
+      background: #090c0a;
+      color: #f5f7f5;
+      padding: 0 12px;
+    }
+    .field input:focus, .field select:focus { border-color: #27d878; }
+    .modal-actions { display: flex; justify-content: end; gap: 9px; margin-top: 22px; }
+    .toast { position: fixed; right: 20px; bottom: 20px; z-index: 70; max-width: min(360px,calc(100vw - 40px)); border: 1px solid #31533d; border-radius: 10px; background: #111512; padding: 13px 16px; box-shadow: 0 12px 34px #0009; font-size: 13px; }
+    @media (max-width: 1080px) {
+      .navbar { gap: 12px; }
+      .nav-links { gap: 0; }
+      .nav-links a { gap: 6px; padding: 8px; font-size: 11px; }
+    }
+    @media (max-width: 850px) {
+      .navbar > .nav-links, .navbar > .nav-spacer, .navbar > .logout { display: none; }
+      .menu-toggle { display: grid; }
+      main { width: min(100% - 36px,720px); padding-top: 28px; }
+      .hero-mark { width: 100px; height: 100px; font-size: 34px; }
+    }
+    @media (max-width: 600px) {
+      .navbar { min-height: 54px; padding: 8px 14px; }
+      main { width: calc(100% - 28px); padding-top: 24px; }
+      .hero { align-items: start; }
+      .hero-mark { display: none; }
+      .bot-grid { grid-template-columns: 1fr; }
+      .section-heading { align-items: start; flex-direction: column; }
+      .bot-card { padding: 17px; }
+      .stat { min-width: 0; flex: 1; padding: 11px; }
+      .stat strong { font-size: 19px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="navbar">
+    <a class="brand" href="index.html" aria-label="CryptoVault dashboard">
+      <span class="brand-mark">CV</span> CryptoVault
+    </a>
+    <span class="nav-spacer"></span>
+    <nav class="nav-links" aria-label="Main navigation">
+      <a href="index.html"><i class="fa-solid fa-layer-group"></i> Dashboard</a>
+      <a href="index.html#markets"><i class="fa-solid fa-chart-line"></i> Markets</a>
+      <a class="active" href="bots.html" aria-current="page"><i class="fa-solid fa-robot"></i> Bots</a>
+      <a href="copy-trading.html"><i class="fa-solid fa-users"></i> Copy Trade</a>
+      <a href="assets.html"><i class="fa-solid fa-wallet"></i> Assets</a>
+      <a href="index.html#activity"><i class="fa-regular fa-clock"></i> History</a>
+      <a href="index.html#learning"><i class="fa-solid fa-graduation-cap"></i> Learn</a>
+    </nav>
+    <button class="logout" type="button" onclick="showToast('Sign out is unavailable in this demo.')"><i class="fa-solid fa-arrow-right-from-bracket"></i> Logout</button>
+    <div class="nav-tools">
+      <button class="nav-icon" id="notification-button" type="button" aria-label="Notifications" aria-expanded="false"><i class="fa-regular fa-bell"></i></button>
+      <button class="menu-toggle" id="menu-button" type="button" aria-label="Open menu" aria-expanded="false">☰</button>
+    </div>
+    <div class="notification-panel" id="notification-panel" hidden>
+      <strong style="font-size:13px">No new notifications</strong>
+      <p style="margin:6px 0 0;color:#929b95;font-size:12px">Updates about your demo strategies will appear here.</p>
+    </div>
+    <nav class="mobile-menu" id="mobile-menu" aria-label="Mobile navigation">
+      <a href="index.html"><i class="fa-solid fa-layer-group"></i>Dashboard</a>
+      <a href="index.html#markets"><i class="fa-solid fa-chart-line"></i>Markets</a>
+      <a class="active" href="bots.html" aria-current="page"><i class="fa-solid fa-robot"></i>Bots</a>
+      <a href="copy-trading.html"><i class="fa-solid fa-users"></i>Copy Trade</a>
+      <a href="assets.html"><i class="fa-solid fa-wallet"></i>Assets</a>
+      <a href="index.html#activity"><i class="fa-regular fa-clock"></i>History</a>
+      <a href="index.html#learning"><i class="fa-solid fa-graduation-cap"></i>Learn</a>
+      <a href="#" id="mobile-logout"><i class="fa-solid fa-arrow-right-from-bracket"></i>Logout</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero" aria-labelledby="page-title">
+      <div>
+        <p class="eyebrow">Strategy workspace</p>
+        <h1 id="page-title">Trading automation</h1>
+        <p>Set up and monitor rule-based strategies in demo mode.</p>
+        <div class="stats" aria-label="Bot account summary">
+          <div class="stat"><strong id="total-bots">3</strong><span>Strategies</span></div>
+          <div class="stat"><strong id="active-bots">1</strong><span>Running demos</span></div>
+          <div class="stat"><strong>—</strong><span>Demo return</span></div>
+        </div>
+      </div>
+      <div class="hero-mark" aria-hidden="true"><i class="fa-solid fa-sliders"></i></div>
+    </section>
+
+    <section aria-labelledby="strategies-title">
+      <div class="section-heading">
+        <div>
+          <h2 id="strategies-title">Available strategies</h2>
+          <p>Choose a template, review its settings, and simulate its status.</p>
+        </div>
+        <span class="demo-note"><i class="fa-solid fa-circle-info"></i> Demo controls only</span>
+      </div>
+      <div class="bot-grid" id="bot-grid"></div>
+    </section>
+    <p class="footer-note"><i class="fa-solid fa-triangle-exclamation"></i> These strategy controls are for interface demonstration only. They do not connect to an exchange, place orders, or guarantee returns.</p>
+  </main>
+
+  <div class="modal-backdrop" id="config-backdrop" hidden>
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="config-title">
+      <button class="modal-close" id="close-config" type="button" aria-label="Close settings"><i class="fa-solid fa-xmark"></i></button>
+      <p class="eyebrow">Strategy settings</p>
+      <h2 id="config-title" style="margin-top:8px">Configure strategy</h2>
+      <p id="config-description" style="color:#929b95;font-size:12px;line-height:1.6;margin:8px 0 0"></p>
+      <form id="config-form">
+        <label class="field"><span>Demo allocation (USD)</span><input id="config-budget" type="number" min="10" max="100000" step="10" required></label>
+        <label class="field"><span>Review interval</span>
+          <select id="config-frequency">
+            <option value="Daily">Daily</option>
+            <option value="Weekly">Weekly</option>
+            <option value="Monthly">Monthly</option>
+          </select>
+        </label>
+        <label class="field"><span>Risk preference</span>
+          <select id="config-risk">
+            <option value="Conservative">Conservative</option>
+            <option value="Balanced">Balanced</option>
+            <option value="Growth">Growth</option>
+          </select>
+        </label>
+        <div class="modal-actions">
+          <button class="btn" id="cancel-config" type="button">Cancel</button>
+          <button class="btn btn-primary" type="submit">Save settings</button>
+        </div>
+      </form>
+    </section>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <script>
+    const strategies = [
+      {
+        id: 'bitcoin-saver',
+        name: 'Bitcoin Saver',
+        symbol: '₿',
+        tag: 'Recurring buy',
+        subtitle: 'BTC · Long-term accumulation',
+        description: 'A simple schedule-based plan that divides a demo allocation into regular Bitcoin purchases.',
+        risk: 'Conservative',
+        cadence: 'Weekly',
+        budget: 250,
+        active: true,
+      },
+      {
+        id: 'ether-pulse',
+        name: 'Ether Pulse',
+        symbol: 'Ξ',
+        tag: 'Momentum watch',
+        subtitle: 'ETH · Trend signals',
+        description: 'A simulated trend-following template for practicing how entry rules and position limits work.',
+        risk: 'Balanced',
+        cadence: 'Daily',
+        budget: 400,
+        active: false,
+      },
+      {
+        id: 'multi-asset',
+        name: 'Multi-Asset Balance',
+        symbol: '◈',
+        tag: 'Portfolio mix',
+        subtitle: 'BTC · ETH · SOL',
+        description: 'A demo rebalancing plan that helps explore target allocations across a small group of assets.',
+        risk: 'Balanced',
+        cadence: 'Monthly',
+        budget: 600,
+        active: false,
+      },
+    ];
+
+    const grid = document.getElementById('bot-grid');
+    const backdrop = document.getElementById('config-backdrop');
+    let configuredStrategyId = null;
+    let toastTimer;
+
+    function renderStrategies() {
+      grid.innerHTML = strategies.map(strategy => `
+        <article class="bot-card">
+          <div class="bot-top">
+            <div class="bot-identity">
+              <span class="bot-symbol" aria-hidden="true">${strategy.symbol}</span>
+              <div><h3>${strategy.name}</h3><div class="bot-subtitle">${strategy.subtitle}</div></div>
+            </div>
+            <span class="badge">${strategy.tag}</span>
+          </div>
+          <p class="bot-desc">${strategy.description}</p>
+          <div class="bot-meta">
+            <div><div class="meta-title">Risk profile</div><div class="meta-value">${strategy.risk}</div></div>
+            <div><div class="meta-title">Review cycle</div><div class="meta-value">${strategy.cadence}</div></div>
+            <div><div class="meta-title">Demo allocation</div><div class="meta-value">$${strategy.budget.toLocaleString()}</div></div>
+          </div>
+          <div class="bot-actions">
+            <button class="btn" type="button" data-configure="${strategy.id}">Configure</button>
+            <button class="btn ${strategy.active ? 'btn-running' : 'btn-primary'}" type="button" data-toggle="${strategy.id}">
+              ${strategy.active ? 'Pause demo' : 'Start demo'}
+            </button>
+          </div>
+          <div class="status ${strategy.active ? 'active' : ''}" style="margin-top:13px" aria-live="polite">
+            ${strategy.active ? 'Demo running · no orders placed' : 'Paused · no orders placed'}
+          </div>
+        </article>
+      `).join('');
+
+      document.getElementById('total-bots').textContent = String(strategies.length);
+      document.getElementById('active-bots').textContent = String(strategies.filter(strategy => strategy.active).length);
+    }
+
+    function showToast(message) {
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.hidden = false;
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { toast.hidden = true; }, 2800);
+    }
+
+    function openConfig(strategyId) {
+      const strategy = strategies.find(item => item.id === strategyId);
+      if (!strategy) return;
+      configuredStrategyId = strategyId;
+      document.getElementById('config-title').textContent = strategy.name;
+      document.getElementById('config-description').textContent = 'Adjust demo settings for this strategy. Saving does not submit or schedule trades.';
+      document.getElementById('config-budget').value = String(strategy.budget);
+      document.getElementById('config-frequency').value = strategy.cadence;
+      document.getElementById('config-risk').value = strategy.risk;
+      backdrop.hidden = false;
+      document.getElementById('config-budget').focus();
+    }
+
+    function closeConfig() {
+      backdrop.hidden = true;
+      configuredStrategyId = null;
+    }
+
+    grid.addEventListener('click', event => {
+      const configureButton = event.target.closest('[data-configure]');
+      if (configureButton) {
+        openConfig(configureButton.dataset.configure);
+        return;
+      }
+
+      const toggleButton = event.target.closest('[data-toggle]');
+      if (!toggleButton) return;
+      const strategy = strategies.find(item => item.id === toggleButton.dataset.toggle);
+      if (!strategy) return;
+      strategy.active = !strategy.active;
+      renderStrategies();
+      showToast(strategy.active
+        ? `${strategy.name} demo enabled. No trades were placed.`
+        : `${strategy.name} demo paused.`);
+    });
+
+    document.getElementById('config-form').addEventListener('submit', event => {
+      event.preventDefault();
+      const strategy = strategies.find(item => item.id === configuredStrategyId);
+      if (!strategy) return;
+      const budget = Number(document.getElementById('config-budget').value);
+      if (!Number.isFinite(budget) || budget < 10 || budget > 100000) {
+        document.getElementById('config-budget').reportValidity();
+        return;
+      }
+      strategy.budget = budget;
+      strategy.cadence = document.getElementById('config-frequency').value;
+      strategy.risk = document.getElementById('config-risk').value;
+      closeConfig();
+      renderStrategies();
+      showToast('Demo settings saved. No trades were placed.');
+    });
+
+    document.getElementById('close-config').addEventListener('click', closeConfig);
+    document.getElementById('cancel-config').addEventListener('click', closeConfig);
+    backdrop.addEventListener('click', event => {
+      if (event.target === backdrop) closeConfig();
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') {
+        closeConfig();
+        document.getElementById('mobile-menu').classList.remove('open');
+        document.getElementById('menu-button').setAttribute('aria-expanded', 'false');
+        document.getElementById('notification-panel').hidden = true;
+        document.getElementById('notification-button').setAttribute('aria-expanded', 'false');
+      }
+    });
+
+    document.getElementById('menu-button').addEventListener('click', () => {
+      const menu = document.getElementById('mobile-menu');
+      const button = document.getElementById('menu-button');
+      const open = menu.classList.toggle('open');
+      button.setAttribute('aria-expanded', String(open));
+      button.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+    });
+    document.getElementById('notification-button').addEventListener('click', () => {
+      const panel = document.getElementById('notification-panel');
+      const button = document.getElementById('notification-button');
+      panel.hidden = !panel.hidden;
+      button.setAttribute('aria-expanded', String(!panel.hidden));
+    });
+    document.getElementById('mobile-logout').addEventListener('click', event => {
+      event.preventDefault();
+      document.getElementById('mobile-menu').classList.remove('open');
+      document.getElementById('menu-button').setAttribute('aria-expanded', 'false');
+      showToast('Sign out is unavailable in this demo.');
+    });
+    document.addEventListener('click', event => {
+      if (!event.target.closest('.navbar')) {
+        document.getElementById('mobile-menu').classList.remove('open');
+        document.getElementById('menu-button').setAttribute('aria-expanded', 'false');
+        document.getElementById('notification-panel').hidden = true;
+        document.getElementById('notification-button').setAttribute('aria-expanded', 'false');
+      }
+    });
+
+    renderStrategies();
+  </script>
+</body>
+</html>

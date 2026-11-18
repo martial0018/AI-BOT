@@ -1,0 +1,1258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CryptoVault – Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    :root {
+      color-scheme: dark;
+      --page: #0c0f0d;
+      --panel: #111613;
+      --line: rgba(91, 190, 123, .17);
+      --green: #20b45a;
+      --green-bright: #39d878;
+      --muted: #8d9991;
+    }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Inter', sans-serif;
+      background:
+        radial-gradient(ellipse at 50% -18%, rgba(19, 122, 62, .2), transparent 48%),
+        var(--page);
+      color: #eef4ef;
+    }
+    header {
+      background: #080808 !important;
+      border-bottom: 1px solid #1a1a1a !important;
+      backdrop-filter: none;
+    }
+    .brand-mark {
+      background: linear-gradient(145deg, #34db77, #087d37) !important;
+      box-shadow: 0 0 22px rgba(32, 180, 90, .28);
+    }
+    .navbar {
+      position: relative;
+      display: flex;
+      min-height: 55px;
+      align-items: center;
+      padding: 8px 20px;
+    }
+    .navbar-spacer { flex: 1; }
+    .nav-right {
+      display: inline-flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .nav-links a, .logout {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border-radius: 7px;
+      color: #c3c6c4;
+      font-size: 13px;
+      font-weight: 500;
+      padding: 8px 10px;
+      white-space: nowrap;
+      transition: color .2s ease, background .2s ease;
+    }
+    .nav-links a:hover { color: #fff; background: #171917; }
+    .nav-links a[aria-current="page"] {
+      color: #07140c;
+      background: #12dc77;
+      font-weight: 600;
+    }
+    .nav-icon { display: inline-flex; width: 16px; justify-content: center; }
+    .logout { color: #f06c72; }
+    .logout:hover { color: #ff9095; background: rgba(240,108,114,.1); }
+    .navbar-tools {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-left: 16px;
+    }
+    .icon-button, .hamburger {
+      position: relative;
+      display: inline-flex;
+      width: 32px;
+      height: 32px;
+      align-items: center;
+      justify-content: center;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: #94a3b8;
+      cursor: pointer;
+    }
+    .icon-button:hover, .hamburger:hover { color: #fff; background: #171917; }
+    .notification-badge {
+      position: absolute;
+      top: 0;
+      right: 0;
+      display: none;
+      min-width: 15px;
+      border-radius: 9px;
+      background: #ef4444;
+      color: white;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 15px;
+      text-align: center;
+    }
+    .notification-panel {
+      position: absolute;
+      top: calc(100% + 10px);
+      right: 48px;
+      z-index: 60;
+      width: min(300px, calc(100vw - 32px));
+      border: 1px solid #292d2a;
+      border-radius: 12px;
+      background: #111412;
+      padding: 16px;
+      box-shadow: 0 16px 40px rgba(0,0,0,.4);
+    }
+    .hamburger { display: none; font-size: 18px; }
+    .mobile-nav { display: none; }
+    .mobile-nav.is-open {
+      position: absolute;
+      top: 100%;
+      right: 12px;
+      left: 12px;
+      z-index: 55;
+      display: grid;
+      gap: 4px;
+      border: 1px solid #292d2a;
+      border-radius: 12px;
+      background: #0c0e0d;
+      padding: 10px;
+      box-shadow: 0 16px 40px rgba(0,0,0,.4);
+    }
+    .mobile-nav a {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-radius: 8px;
+      color: #d3d8d4;
+      padding: 11px 12px;
+    }
+    .mobile-nav a[aria-current="page"] { background: #12dc77; color: #07140c; }
+    .mobile-nav .logout { color: #f06c72; }
+    @media (max-width: 1023px) {
+      .navbar > .nav-right { display: none; }
+      .hamburger { display: inline-flex; }
+    }
+    @media (min-width: 1024px) {
+      .mobile-nav { display: none !important; }
+    }
+    .market-strip {
+      overflow: hidden;
+      border-bottom: 1px solid rgba(255,255,255,.07);
+      background: rgba(17, 19, 18, .92);
+    }
+    .market-track {
+      display: flex;
+      width: max-content;
+      animation: ticker-scroll 36s linear infinite;
+    }
+    .market-strip:hover .market-track { animation-play-state: paused; }
+    .ticker-item {
+      display: flex;
+      align-items: center;
+      gap: .55rem;
+      padding: .8rem 1.5rem;
+      border-right: 1px solid rgba(255,255,255,.06);
+      white-space: nowrap;
+      font-size: .75rem;
+    }
+    .ticker-item .ticker-name { color: #dce5de; font-weight: 600; }
+    .ticker-item .ticker-price { color: #b2bdb5; }
+    @keyframes ticker-scroll { to { transform: translateX(-50%); } }
+    .page-intro { text-align: center; }
+    .intro-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: .5rem;
+      padding: .35rem .85rem;
+      border: 1px solid rgba(43, 192, 102, .3);
+      border-radius: 999px;
+      background: rgba(17, 81, 43, .14);
+      color: #36c873;
+      font-size: .72rem;
+      letter-spacing: .06em;
+    }
+    .intro-badge::before {
+      content: '';
+      width: .45rem;
+      height: .45rem;
+      border-radius: 50%;
+      background: var(--green-bright);
+      box-shadow: 0 0 10px rgba(57,216,120,.7);
+    }
+    .glass {
+      background: linear-gradient(135deg, rgba(15, 35, 23, .86), rgba(17, 20, 18, .96)) !important;
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--line) !important;
+      box-shadow: 0 18px 55px rgba(0,0,0,.16);
+    }
+    .portfolio-card {
+      position: relative;
+      overflow: hidden;
+      background:
+        radial-gradient(ellipse at 85% 20%, rgba(27, 154, 76, .2), transparent 34%),
+        linear-gradient(115deg, rgba(12, 41, 24, .96), rgba(16, 21, 18, .98)) !important;
+      border-color: rgba(55, 188, 101, .26) !important;
+    }
+    .portfolio-card::after {
+      position: absolute;
+      top: -110px;
+      right: -85px;
+      width: 280px;
+      height: 280px;
+      border: 1px solid rgba(57,216,120,.1);
+      border-radius: 50%;
+      box-shadow: 0 0 0 24px rgba(57,216,120,.025), 0 0 0 50px rgba(57,216,120,.018);
+      content: '';
+      pointer-events: none;
+    }
+    .portfolio-card > div { position: relative; z-index: 1; }
+    .section-label {
+      color: #78877c;
+      font-size: .68rem;
+      font-weight: 600;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    .dashboard-card {
+      border: 1px solid rgba(255,255,255,.07);
+      border-radius: 1rem;
+      background: linear-gradient(145deg, rgba(20,25,22,.96), rgba(15,19,17,.96));
+    }
+    .ticker-frame {
+      border-bottom: 2px solid #20d875;
+      background: rgba(8, 10, 9, .92);
+    }
+    .learning-progress {
+      height: .4rem;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(255,255,255,.09);
+    }
+    .learning-progress > span {
+      display: block;
+      width: 40%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #18bb61, #53e791);
+    }
+    .holding-card {
+      border: 1px solid rgba(255,255,255,.075);
+      border-radius: .9rem;
+      background: linear-gradient(145deg, rgba(20,25,22,.96), rgba(15,19,17,.96));
+      transition: border-color .2s ease, transform .2s ease;
+    }
+    .holding-card:hover {
+      border-color: rgba(57,216,120,.35);
+      transform: translateY(-2px);
+    }
+    .stat-card { min-height: 120px; }
+    .chart-grid line { stroke: rgba(255,255,255,.07); stroke-dasharray: 4 6; }
+    .chart-area { fill: url(#chart-fill); }
+    .chart-line {
+      fill: none;
+      stroke: #39d878;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 3;
+      filter: drop-shadow(0 0 7px rgba(57,216,120,.35));
+      transition: d .25s ease;
+    }
+    .chart-range {
+      border: 1px solid transparent;
+      border-radius: .55rem;
+      color: #87938a;
+      font-size: .75rem;
+      padding: .4rem .65rem;
+    }
+    .chart-range[aria-pressed="true"] {
+      border-color: rgba(57,216,120,.2);
+      background: rgba(27,122,62,.18);
+      color: #5be28b;
+    }
+    .allocation-bar {
+      display: flex;
+      height: .45rem;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(255,255,255,.06);
+    }
+    .allocation-segment { height: 100%; }
+    .coin-icon {
+      display: inline-flex;
+      width: 2.2rem;
+      height: 2.2rem;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      background: rgba(255,255,255,.06);
+      font-weight: 700;
+    }
+    .activity-dot {
+      width: .55rem;
+      height: .55rem;
+      border-radius: 50%;
+      background: #39d878;
+      box-shadow: 0 0 10px rgba(57,216,120,.4);
+    }
+    .activity-dot.status-offline {
+      background: #87938a;
+      box-shadow: none;
+    }
+    .modal-backdrop {
+      background: rgba(0, 0, 0, 0.78);
+      backdrop-filter: blur(5px);
+      overflow-y: auto;
+      padding: 1rem 0;
+    }
+    .deposit-modal-card {
+      max-height: calc(100vh - 2rem);
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+    .price-up { color: #37cd75; }
+    .price-down { color: #f06c72; }
+    .bg-indigo-600 { background-color: #159447 !important; }
+    .hover\:bg-indigo-500:hover { background-color: #1cad55 !important; }
+    .text-indigo-400, .text-indigo-300 { color: #48ce7b !important; }
+    .bg-gray-800 { background-color: #1a201c !important; }
+    .hover\:bg-gray-700:hover { background-color: #252d27 !important; }
+    .bg-gray-900 { background-color: #111613 !important; }
+    .text-gray-400 { color: #a0aaa3 !important; }
+    .text-gray-500 { color: #758078 !important; }
+    .border-gray-800, .divide-gray-800 > :not([hidden]) ~ :not([hidden]) {
+      border-color: rgba(255,255,255,.075) !important;
+    }
+    table thead { background-color: rgba(255,255,255,.025) !important; }
+    tbody tr:hover { background-color: rgba(39, 144, 75, .07) !important; }
+    input, select {
+      color: #eef4ef;
+      background-color: #111613 !important;
+      border-color: rgba(255,255,255,.12) !important;
+    }
+    input:focus, select:focus { border-color: rgba(57,216,120,.6) !important; }
+    button { transition: background-color .2s ease, border-color .2s ease, transform .2s ease; }
+    button:hover { transform: translateY(-1px); }
+    @media (max-width: 640px) {
+      .ticker-item { padding: .7rem .95rem; }
+      .portfolio-card::after { right: -190px; }
+    }
+  </style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+
+  <!-- Header -->
+  <header class="sticky top-0 z-40">
+    <div class="navbar">
+      <a href="index.html#dashboard" class="flex items-center gap-2.5 no-underline" aria-label="CryptoVault dashboard">
+        <div class="brand-mark w-9 h-9 rounded-xl flex items-center justify-center font-bold text-white">
+          CV
+        </div>
+        <span class="text-lg font-bold tracking-tight text-green-400">CryptoVault</span>
+      </a>
+      <div class="navbar-spacer"></div>
+      <div class="nav-right">
+        <nav class="nav-links" aria-label="Main navigation">
+          <a href="index.html#dashboard" aria-current="page"><span class="nav-icon"><i class="fas fa-layer-group"></i></span>Dashboard</a>
+          <a href="index.html#markets"><span class="nav-icon"><i class="fas fa-chart-line"></i></span>Markets</a>
+          <a href="bots.html"><span class="nav-icon"><i class="fas fa-robot"></i></span>Bots</a>
+          <a href="copy-trading.html"><span class="nav-icon"><i class="fas fa-users"></i></span>Copy Trade</a>
+          <a href="assets.html"><span class="nav-icon"><i class="fas fa-folder-plus"></i></span>Assets</a>
+          <a href="index.html#activity"><span class="nav-icon"><i class="fas fa-clock"></i></span>History</a>
+          <a href="index.html#learning"><span class="nav-icon"><i class="fas fa-graduation-cap"></i></span>Academy</a>
+        </nav>
+        <button class="logout" type="button" data-action="logout"><span class="nav-icon"><i class="fas fa-right-from-bracket"></i></span>Logout</button>
+      </div>
+      <div class="navbar-tools">
+        <button id="notification-bell" class="icon-button" type="button" aria-label="Notifications" aria-expanded="false" data-action="toggle-notifications">
+          <i class="far fa-bell"></i><span id="notification-badge" class="notification-badge">0</span>
+        </button>
+        <button id="menu-toggle" class="hamburger" type="button" aria-label="Open navigation menu" aria-expanded="false" data-action="toggle-menu">☰</button>
+      </div>
+      <div id="notification-panel" class="notification-panel hidden" role="status">
+        <p class="font-semibold text-sm">You’re all caught up</p>
+        <p class="text-xs text-gray-400 mt-1">New account notifications will appear here.</p>
+      </div>
+      <nav id="mobile-nav" class="mobile-nav" aria-label="Mobile navigation">
+        <a href="index.html#dashboard" aria-current="page"><i class="fas fa-layer-group"></i>Dashboard</a>
+        <a href="index.html#markets"><i class="fas fa-chart-line"></i>Markets</a>
+        <a href="bots.html"><i class="fas fa-robot"></i>Bots</a>
+        <a href="copy-trading.html"><i class="fas fa-users"></i>Copy Trade</a>
+        <a href="assets.html"><i class="fas fa-folder-plus"></i>Assets</a>
+        <a href="index.html#activity"><i class="fas fa-clock"></i>History</a>
+        <a href="index.html#learning"><i class="fas fa-graduation-cap"></i>Academy</a>
+        <button class="logout" type="button" data-action="logout"><i class="fas fa-right-from-bracket"></i>Logout</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 py-8 md:py-10">
+    <section id="dashboard" class="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between mb-7">
+      <div>
+        <p class="section-label mb-2">Account overview</p>
+        <h1 class="text-3xl md:text-4xl font-bold tracking-tight">Welcome back</h1>
+        <p class="section-label mt-3">Demo account</p>
+        <p class="text-green-400 text-sm font-medium mt-1">@trader_demo</p>
+        <p class="text-gray-400 text-sm mt-2">Here’s your latest portfolio overview.</p>
+      </div>
+      <div class="flex items-center justify-between sm:justify-end gap-4">
+        <div class="flex items-center gap-2 text-xs text-gray-400">
+          <span class="activity-dot"></span>
+            Market data <span id="data-status" class="text-gray-400">connecting</span>
+        </div>
+        <span class="intro-badge">DEMO MODE</span>
+      </div>
+    </section>
+
+    <section class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6" aria-label="Portfolio overview">
+      <div class="glass portfolio-card rounded-2xl p-5 md:p-6">
+        <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-5">
+          <div>
+            <p class="section-label mb-3"><i class="fas fa-wallet mr-2"></i>Demo portfolio</p>
+            <h2 class="text-4xl md:text-5xl font-bold tracking-tight" id="total-balance">$0.00</h2>
+            <p class="text-sm mt-3"><span id="portfolio-change" class="price-up">—</span><span class="text-gray-500"> past 24 hours</span></p>
+          </div>
+          <span class="intro-badge">SIMULATED BALANCE</span>
+        </div>
+        <div class="mt-7 flex flex-wrap gap-3">
+          <button data-action="open-modal" data-modal="deposit" class="bg-indigo-600 hover:bg-indigo-500 px-5 py-2.5 rounded-xl font-medium flex items-center gap-2">
+            <i class="fas fa-plus"></i> Add funds
+          </button>
+          <button data-action="open-modal" data-modal="send" class="bg-gray-800 hover:bg-gray-700 px-5 py-2.5 rounded-xl font-medium flex items-center gap-2">
+            <i class="fas fa-paper-plane"></i> Send
+          </button>
+          <button data-action="open-modal" data-modal="withdraw" class="bg-gray-800 hover:bg-gray-700 px-5 py-2.5 rounded-xl font-medium flex items-center gap-2">
+            <i class="fas fa-arrow-up"></i> Withdraw
+          </button>
+        </div>
+      </div>
+
+      <div class="dashboard-card p-5 md:p-6 flex flex-col justify-between" id="learning">
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <p class="section-label mb-2"><i class="fas fa-graduation-cap mr-2"></i>Learning center</p>
+            <h2 class="text-lg font-semibold">Build your market knowledge</h2>
+          </div>
+          <span class="coin-icon text-green-300"><i class="fas fa-book-open"></i></span>
+        </div>
+        <p class="text-sm text-gray-400 mt-4">Explore the basics of crypto, portfolio risk, and wallet safety at your own pace.</p>
+        <div class="mt-5">
+          <div class="flex justify-between text-xs mb-2"><span class="text-gray-400">Getting started</span><span class="text-green-300">2 of 5 topics</span></div>
+          <div class="learning-progress" role="progressbar" aria-label="Learning topics completed" aria-valuenow="40" aria-valuemin="0" aria-valuemax="100"><span></span></div>
+        </div>
+      </div>
+    </section>
+
+    <div class="ticker-frame mb-7" id="markets" aria-label="Live crypto market prices">
+      <div class="market-strip"><div class="market-track" id="market-ticker"></div></div>
+    </div>
+
+    <section class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-5">
+      <div class="dashboard-card p-5 stat-card">
+        <p class="text-sm text-gray-400">24h portfolio change</p>
+        <p class="text-2xl font-semibold mt-3" id="daily-change">—</p>
+        <p class="text-xs text-gray-500 mt-1">Weighted by your demo balances</p>
+      </div>
+      <div class="dashboard-card p-5 stat-card">
+        <p class="text-sm text-gray-400">Best performer</p>
+        <p class="text-2xl font-semibold mt-3" id="best-performer">—</p>
+        <p class="text-xs text-gray-500 mt-1">24-hour market movement</p>
+      </div>
+      <div class="dashboard-card p-5 stat-card">
+        <p class="text-sm text-gray-400">Market watch</p>
+        <p class="text-2xl font-semibold mt-3">7 <span class="text-base font-normal text-gray-400">assets</span></p>
+        <p class="text-xs text-gray-500 mt-1">Prices refresh automatically</p>
+      </div>
+    </section>
+
+    <section id="analytics" class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-8">
+      <div class="dashboard-card p-5 md:p-6 lg:col-span-2">
+        <div class="flex flex-wrap items-start justify-between gap-4 mb-5">
+          <div>
+            <p class="section-label">Portfolio analytics</p>
+            <h2 class="text-lg font-semibold mt-2">Value movement</h2>
+            <p class="text-xs text-gray-500 mt-1">Illustrative performance view · not historical account data</p>
+          </div>
+          <div class="flex gap-1" role="group" aria-label="Chart time range">
+            <button class="chart-range" data-range="1D" aria-pressed="false">1D</button>
+            <button class="chart-range" data-range="1W" aria-pressed="false">1W</button>
+            <button class="chart-range" data-range="1M" aria-pressed="true">1M</button>
+            <button class="chart-range" data-range="1Y" aria-pressed="false">1Y</button>
+          </div>
+        </div>
+        <div class="h-56 md:h-64">
+          <svg id="portfolio-chart" class="w-full h-full" viewBox="0 0 800 240" preserveAspectRatio="none" role="img" aria-label="Illustrative portfolio performance chart">
+            <defs>
+              <linearGradient id="chart-fill" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0%" stop-color="#39d878" stop-opacity=".24"></stop>
+                <stop offset="100%" stop-color="#39d878" stop-opacity="0"></stop>
+              </linearGradient>
+            </defs>
+            <g class="chart-grid">
+              <line x1="0" y1="30" x2="800" y2="30"></line>
+              <line x1="0" y1="90" x2="800" y2="90"></line>
+              <line x1="0" y1="150" x2="800" y2="150"></line>
+              <line x1="0" y1="210" x2="800" y2="210"></line>
+            </g>
+            <path id="chart-area" class="chart-area"></path>
+            <path id="chart-line" class="chart-line"></path>
+          </svg>
+        </div>
+        <div class="flex justify-between text-xs text-gray-500 mt-2" aria-hidden="true">
+          <span id="chart-start">Earlier</span><span>Time range</span><span id="chart-end">Now</span>
+        </div>
+      </div>
+
+      <aside class="dashboard-card p-5 md:p-6">
+        <p class="section-label">Portfolio mix</p>
+        <h2 class="text-lg font-semibold mt-2 mb-5">Asset allocation</h2>
+        <div id="allocation-bar" class="allocation-bar mb-5" aria-label="Asset allocation breakdown"></div>
+        <div id="allocation-list" class="space-y-4"></div>
+      </aside>
+    </section>
+
+    <section class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-8">
+      <section class="lg:col-span-1" aria-labelledby="market-heading">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <p class="section-label">Discover</p>
+            <h2 class="text-lg font-semibold mt-1" id="market-heading">Market watch</h2>
+          </div>
+          <button data-action="refresh-prices" class="text-sm text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
+            <i class="fas fa-sync-alt"></i> Refresh
+          </button>
+        </div>
+        <div class="dashboard-card overflow-hidden">
+          <div id="watchlist" class="divide-y divide-gray-800"></div>
+        </div>
+      </section>
+
+      <section class="lg:col-span-2" id="holdings" aria-labelledby="holdings-heading">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <p class="section-label">Your account</p>
+            <h2 class="text-lg font-semibold mt-1" id="holdings-heading">Holdings</h2>
+          </div>
+          <span class="text-xs text-gray-500">Demo balances</span>
+        </div>
+        <div class="dashboard-card overflow-hidden">
+          <div id="holdings-body" class="grid grid-cols-1 md:grid-cols-2 gap-3 p-3"></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="mb-8" id="activity" aria-labelledby="activity-heading">
+      <div class="flex items-end justify-between mb-4">
+        <div>
+          <p class="section-label">Account log</p>
+          <h2 class="text-lg font-semibold mt-1" id="activity-heading">Recent activity</h2>
+        </div>
+        <span class="text-xs text-gray-500">Sample activity</span>
+      </div>
+      <div class="dashboard-card divide-y divide-gray-800">
+        <div class="flex items-center justify-between gap-4 p-4 md:px-5">
+          <div class="flex items-center gap-3">
+            <span class="coin-icon text-green-300"><i class="fas fa-arrow-down"></i></span>
+            <div><p class="text-sm font-medium">Deposit received</p><p class="text-xs text-gray-500">Bitcoin · Demo transaction</p></div>
+          </div>
+          <div class="text-right"><p class="text-sm font-medium">+0.004 BTC</p><p class="text-xs text-gray-500">Today</p></div>
+        </div>
+        <div class="flex items-center justify-between gap-4 p-4 md:px-5">
+          <div class="flex items-center gap-3">
+            <span class="coin-icon text-gray-300"><i class="fas fa-arrow-up"></i></span>
+            <div><p class="text-sm font-medium">Sent to wallet</p><p class="text-xs text-gray-500">Ethereum · Demo transaction</p></div>
+          </div>
+          <div class="text-right"><p class="text-sm font-medium">−0.12 ETH</p><p class="text-xs text-gray-500">Yesterday</p></div>
+        </div>
+        <div class="flex items-center justify-between gap-4 p-4 md:px-5">
+          <div class="flex items-center gap-3">
+            <span class="coin-icon text-green-300"><i class="fas fa-right-left"></i></span>
+            <div><p class="text-sm font-medium">Asset conversion</p><p class="text-xs text-gray-500">USDT to Solana · Demo transaction</p></div>
+          </div>
+          <div class="text-right"><p class="text-sm font-medium">12.4 SOL</p><p class="text-xs text-gray-500">Nov 12</p></div>
+        </div>
+      </div>
+    </section>
+    <footer class="border-t border-gray-800 py-6 flex flex-col sm:flex-row justify-between gap-2 text-xs text-gray-500">
+      <span>CryptoVault · Portfolio dashboard demo</span>
+      <span>Market prices provided by CoinGecko</span>
+    </footer>
+  </main>
+  <div id="demo-toast" class="fixed bottom-5 left-1/2 z-[70] hidden -translate-x-1/2 rounded-xl border border-gray-700 bg-gray-900 px-4 py-3 text-sm shadow-xl" role="status" aria-live="polite"></div>
+
+  <!-- ===================== MODALS ===================== -->
+
+  <!-- Deposit Modal -->
+  <div id="modal-deposit" class="fixed inset-0 z-50 hidden items-center justify-center modal-backdrop">
+    <div class="glass rounded-2xl w-full max-w-md mx-4 p-6 relative deposit-modal-card">
+      <button data-action="close-modal" data-modal="deposit" class="absolute top-4 right-4 text-gray-400 hover:text-white">
+        <i class="fas fa-times"></i>
+      </button>
+      <h3 class="text-xl font-semibold mb-1">Generate Deposit Address</h3>
+      <p class="text-sm text-gray-400 mb-4">Each request creates a fresh self-custody address from your configured public wallet keys.</p>
+
+      <div class="space-y-4">
+        <p id="deposit-api-help" class="text-xs text-gray-500">Checking deposit address configuration…</p>
+        <div>
+          <p class="text-sm text-gray-300 mb-2">Choose an asset and network</p>
+          <p class="text-xs text-gray-500 mb-2">Only send the selected asset on the selected network to its address.</p>
+          <div id="deposit-supported-payments" class="grid grid-cols-2 gap-2" aria-live="polite">
+            <p class="text-xs text-gray-500">Loading deposit options…</p>
+          </div>
+        </div>
+        <div class="bg-gray-900 rounded-xl p-4 text-sm">
+          <div class="flex flex-col items-center gap-3 sm:flex-row">
+            <img id="deposit-qr" class="hidden h-36 w-36 rounded-lg bg-white p-2" alt="QR code for deposit address">
+            <div class="min-w-0 flex-1">
+              <p class="text-gray-400 mb-2">Your unique address:</p>
+              <p id="deposit-address" class="hidden font-mono text-indigo-300 break-all select-all"></p>
+              <p class="text-xs text-gray-500 mt-2" id="deposit-status" role="status" aria-live="polite"></p>
+              <button id="copy-deposit-address" data-action="copy-deposit-address" class="hidden mt-3 text-xs text-indigo-400 hover:text-indigo-300">
+                <i class="fas fa-copy"></i> Copy address
+              </button>
+            </div>
+          </div>
+          <p id="deposit-warning" class="text-xs text-amber-300 mt-3">Automatic on-chain monitoring is not configured. Do not send funds yet; deposits will not be detected or credited automatically.</p>
+          <p id="deposit-error" class="hidden text-sm text-red-300 mt-3" role="alert"></p>
+        </div>
+        <button id="generate-deposit" data-action="generate-deposit-address" class="w-full bg-indigo-600 hover:bg-indigo-500 py-3 rounded-xl font-medium transition disabled:cursor-not-allowed disabled:opacity-50" disabled>
+          Generate unique address
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Send Modal -->
+  <div id="modal-send" class="fixed inset-0 z-50 hidden items-center justify-center modal-backdrop">
+    <div class="glass rounded-2xl w-full max-w-md mx-4 p-6 relative">
+      <button data-action="close-modal" data-modal="send" class="absolute top-4 right-4 text-gray-400 hover:text-white">
+        <i class="fas fa-times"></i>
+      </button>
+      <h3 class="text-xl font-semibold mb-1">Send Crypto</h3>
+      <p class="text-sm text-gray-400 mb-6">Transfer to another user or wallet</p>
+
+      <div class="space-y-4">
+        <div>
+          <label class="text-sm text-gray-400 mb-1 block">Recipient</label>
+          <input type="text" placeholder="@username or wallet address"
+                 class="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 focus:outline-none focus:border-indigo-500">
+        </div>
+        <div>
+          <label class="text-sm text-gray-400 mb-1 block">Asset</label>
+          <select class="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 focus:outline-none focus:border-indigo-500">
+            <option>Bitcoin (BTC)</option>
+            <option>Ethereum (ETH)</option>
+            <option>Tether (USDT)</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-sm text-gray-400 mb-1 block">Amount</label>
+          <input type="number" placeholder="0.00"
+                 class="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 focus:outline-none focus:border-indigo-500">
+        </div>
+        <button data-action="demo-alert" data-message="Demo: Transfer simulated successfully" class="w-full bg-indigo-600 hover:bg-indigo-500 py-3 rounded-xl font-medium transition">
+          Send Now
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Withdraw Modal -->
+  <div id="modal-withdraw" class="fixed inset-0 z-50 hidden items-center justify-center modal-backdrop">
+    <div class="glass rounded-2xl w-full max-w-md mx-4 p-6 relative">
+      <button data-action="close-modal" data-modal="withdraw" class="absolute top-4 right-4 text-gray-400 hover:text-white">
+        <i class="fas fa-times"></i>
+      </button>
+      <h3 class="text-xl font-semibold mb-1">Withdraw Funds</h3>
+      <p class="text-sm text-gray-400 mb-6">Send to your external wallet</p>
+
+      <div class="space-y-4">
+        <div>
+          <label class="text-sm text-gray-400 mb-1 block">Asset</label>
+          <select class="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 focus:outline-none focus:border-indigo-500">
+            <option>Bitcoin (BTC)</option>
+            <option>Ethereum (ETH)</option>
+            <option>Tether (USDT)</option>
+            <option>Solana (SOL)</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-sm text-gray-400 mb-1 block">Amount (USD)</label>
+          <input type="number" placeholder="100.00"
+                 class="w-full bg-gray-900 border border-gray--700 rounded-xl px-4 py-3 focus:outline-none focus:border-indigo-500">
+        </div>
+        <div>
+          <label class="text-sm text-gray-400 mb-1 block">Destination Address</label>
+          <input type="text" placeholder="Enter wallet address"
+                 class="w-full bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 focus:outline-none focus:border-indigo-500">
+        </div>
+        <div class="bg-amber-900/30 border border-amber-700/50 rounded-xl p-3 text-sm text-amber-200">
+          <i class="fas fa-exclamation-triangle mr-1"></i>
+          Double-check the address and network. Wrong network = permanent loss.
+        </div>
+        <button data-action="demo-alert" data-message="Demo: Withdrawal request submitted (no real funds moved)" class="w-full bg-indigo-600 hover:bg-indigo-500 py-3 rounded-xl font-medium transition">
+          Review & Confirm
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ========== DEMO HOLDINGS ==========
+    const holdings = [
+      { id: 'bitcoin',   symbol: 'BTC',  name: 'Bitcoin',   amount: 0.0125, icon: '₿' },
+      { id: 'ethereum',  symbol: 'ETH',  name: 'Ethereum',  amount: 0.85,   icon: 'Ξ' },
+      { id: 'solana',    symbol: 'SOL',  name: 'Solana',    amount: 12.4,   icon: '◎' },
+      { id: 'ripple',    symbol: 'XRP',  name: 'XRP',       amount: 1250,   icon: '✕' },
+      { id: 'binancecoin', symbol: 'BNB', name: 'BNB',      amount: 3.2,    icon: '🟡' },
+    ];
+
+    const watchIds = ['bitcoin', 'ethereum', 'solana', 'ripple', 'binancecoin', 'cardano', 'dogecoin'];
+    const tickerSymbols = {
+      bitcoin: 'BTC',
+      ethereum: 'ETH',
+      solana: 'SOL',
+      ripple: 'XRP',
+      binancecoin: 'BNB',
+      cardano: 'ADA',
+      dogecoin: 'DOGE',
+    };
+    const allocationColors = ['#38d878', '#62b8ff', '#a78bfa', '#f0b55a', '#f06c72'];
+    const chartSeries = {
+      '1D': [38, 42, 39, 49, 45, 54, 51, 59, 56, 68, 64, 75, 70, 83, 80, 91],
+      '1W': [34, 39, 36, 44, 42, 48, 45, 56, 52, 61, 58, 68, 65, 77, 73, 86],
+      '1M': [30, 36, 33, 42, 38, 49, 45, 54, 50, 62, 59, 70, 66, 79, 74, 91],
+      '1Y': [24, 31, 28, 37, 34, 44, 40, 50, 46, 58, 53, 65, 61, 74, 70, 88],
+    };
+
+    // ========== FETCH PRICES ==========
+    async function fetchPrices() {
+      try {
+        const ids = watchIds.join(',');
+        const res = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`);
+        if (!res.ok) {
+          throw new Error(`CoinGecko returned HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        return data;
+      } catch (err) {
+        console.error('Price fetch failed', err);
+        return {};
+      }
+    }
+
+    function renderTicker(prices) {
+      const ticker = document.getElementById('market-ticker');
+      const groups = [false, true].map(isDuplicate => `
+        <div class="ticker-group flex">
+          ${watchIds.map(id => {
+            const price = prices[id]?.usd;
+            const change = prices[id]?.usd_24h_change ?? 0;
+            const changeClass = change >= 0 ? 'price-up' : 'price-down';
+            const formattedPrice = typeof price === 'number'
+              ? `$${price.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+              : '—';
+            const formattedChange = typeof price === 'number'
+              ? `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`
+              : '—';
+
+            return `
+              <div class="ticker-item" ${isDuplicate ? 'aria-hidden="true"' : ''}>
+                <span class="ticker-name">${tickerSymbols[id]}</span>
+                <span class="ticker-price">${formattedPrice}</span>
+                <span class="${typeof price === 'number' ? changeClass : 'text-gray-500'}">${formattedChange}</span>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `);
+      ticker.innerHTML = groups.join('');
+    }
+
+    function renderChart(range) {
+      const values = chartSeries[range];
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const points = values.map((value, index) => {
+        const x = 12 + index * (776 / (values.length - 1));
+        const y = 198 - ((value - min) / (max - min || 1)) * 158;
+        return `${x},${y}`;
+      });
+      const linePath = `M ${points.join(' L ')}`;
+
+      document.getElementById('chart-line').setAttribute('d', linePath);
+      document.getElementById('chart-area').setAttribute('d', `${linePath} L 788,220 L 12,220 Z`);
+      document.getElementById('chart-start').textContent = range === '1D' ? '24 hours ago' : range === '1W' ? '7 days ago' : range === '1M' ? '30 days ago' : '12 months ago';
+      document.querySelectorAll('.chart-range').forEach(button => {
+        button.setAttribute('aria-pressed', String(button.dataset.range === range));
+      });
+    }
+
+    function renderAllocation(prices) {
+      const entries = holdings.map((holding, index) => ({
+        ...holding,
+        value: holding.amount * (prices[holding.id]?.usd || 0),
+        color: allocationColors[index % allocationColors.length],
+      }));
+      const total = entries.reduce((sum, entry) => sum + entry.value, 0);
+      const bar = document.getElementById('allocation-bar');
+      const list = document.getElementById('allocation-list');
+
+      bar.innerHTML = entries.map(entry => {
+        const share = total ? (entry.value / total) * 100 : 0;
+        return `<span class="allocation-segment" style="width:${share}%;background:${entry.color}" title="${entry.symbol}: ${share.toFixed(1)}%"></span>`;
+      }).join('');
+      list.innerHTML = entries.map(entry => {
+        const share = total ? (entry.value / total) * 100 : 0;
+        return `
+          <div class="flex items-center justify-between gap-3 text-sm">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="w-2.5 h-2.5 rounded-full shrink-0" style="background:${entry.color}"></span>
+              <span class="truncate">${entry.name}</span>
+            </div>
+            <span class="text-gray-400 shrink-0">${total ? `${share.toFixed(1)}%` : '—'}</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // ========== RENDER ==========
+    async function render() {
+      const prices = await fetchPrices();
+      let total = 0;
+      let weightedChange = 0;
+      const hasMarketData = watchIds.some(id => typeof prices[id]?.usd === 'number');
+      const status = document.getElementById('data-status');
+      status.textContent = hasMarketData ? 'live' : 'unavailable';
+      status.className = hasMarketData ? 'text-green-400' : 'text-gray-400';
+      status.previousElementSibling.classList.toggle('status-offline', !hasMarketData);
+      renderTicker(prices);
+
+      // Watchlist
+      const watchEl = document.getElementById('watchlist');
+      watchEl.innerHTML = '';
+      watchIds.forEach(id => {
+        const p = prices[id] || { usd: 0, usd_24h_change: 0 };
+        const hasPrice = typeof p.usd === 'number';
+        const change = p.usd_24h_change ?? 0;
+        const changeClass = change >= 0 ? 'price-up' : 'price-down';
+        const changeSign = change >= 0 ? '+' : '';
+        const formattedPrice = hasPrice
+          ? `$${p.usd.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+          : '—';
+        const formattedChange = hasPrice
+          ? `${changeSign}${change.toFixed(2)}%`
+          : '—';
+
+        watchEl.innerHTML += `
+          <div class="px-5 py-4 flex items-center justify-between hover:bg-gray-900/50 transition">
+            <div class="flex items-center gap-3">
+              <div class="w-8 h-8 rounded-full bg-gray-800 flex items-center justify-center text-sm font-bold">
+                ${id.slice(0,1).toUpperCase()}
+              </div>
+              <div>
+                <div class="font-medium capitalize">${id}</div>
+                <div class="text-xs text-gray-500 uppercase">${id === 'binancecoin' ? 'BNB' : id.slice(0,3)}</div>
+              </div>
+            </div>
+            <div class="text-right">
+              <div class="font-medium">${formattedPrice}</div>
+              <div class="text-xs ${hasPrice ? changeClass : 'text-gray-500'}">${formattedChange}</div>
+            </div>
+          </div>
+        `;
+      });
+
+      // Holdings
+      const tbody = document.getElementById('holdings-body');
+      tbody.innerHTML = '';
+      holdings.forEach(h => {
+        const p = prices[h.id] || { usd: 0 };
+        const value = h.amount * (p.usd || 0);
+        total += value;
+        weightedChange += value * (p.usd_24h_change || 0) / 100;
+
+        const change = p.usd_24h_change ?? 0;
+        const formattedPrice = typeof p.usd === 'number'
+          ? `$${p.usd.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+          : '—';
+        const formattedValue = p.usd
+          ? `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+          : '—';
+
+        tbody.innerHTML += `
+          <article class="holding-card p-4" aria-label="${h.name} holding">
+            <div class="flex items-start justify-between gap-3">
+              <div class="flex items-center gap-3">
+                <span class="coin-icon">${h.icon}</span>
+                <div><p class="font-semibold">${h.name}</p><p class="text-xs text-gray-500">${h.symbol}</p></div>
+              </div>
+              <span class="text-xs px-2 py-1 rounded-md ${change >= 0 ? 'price-up bg-green-950/50' : 'price-down bg-red-950/40'}">${change >= 0 ? '+' : ''}${change.toFixed(2)}%</span>
+            </div>
+            <p class="text-xl font-semibold mt-4">${formattedPrice}</p>
+            <p class="text-xs text-gray-400 mt-1">Amount: ${h.amount.toLocaleString()} ${h.symbol}</p>
+            <div class="flex items-center justify-between gap-2 mt-3">
+              <p class="text-sm price-up">Value: ${formattedValue}</p>
+              <button data-action="open-modal" data-modal="send" class="text-xs text-indigo-400 hover:text-indigo-300">Trade <i class="fas fa-arrow-right ml-1"></i></button>
+            </div>
+          </article>
+        `;
+      });
+
+      document.getElementById('total-balance').textContent =
+        '$' + total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+      const changePercent = total ? (weightedChange / total) * 100 : null;
+      const changeText = changePercent === null
+        ? 'Price data unavailable'
+        : `${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%`;
+      const changeClass = changePercent === null ? 'text-gray-400' : changePercent >= 0 ? 'price-up' : 'price-down';
+      document.getElementById('portfolio-change').textContent = changeText;
+      document.getElementById('portfolio-change').className = changeClass;
+      document.getElementById('daily-change').textContent = changeText;
+      document.getElementById('daily-change').className = `text-2xl font-semibold mt-3 ${changeClass}`;
+
+      const bestPerformer = watchIds
+        .map(id => ({ id, change: prices[id]?.usd_24h_change }))
+        .filter(asset => typeof asset.change === 'number')
+        .sort((a, b) => b.change - a.change)[0];
+      document.getElementById('best-performer').textContent = bestPerformer
+        ? `${tickerSymbols[bestPerformer.id]} ${bestPerformer.change >= 0 ? '+' : ''}${bestPerformer.change.toFixed(2)}%`
+        : '—';
+      document.getElementById('best-performer').className = `text-2xl font-semibold mt-3 ${bestPerformer ? bestPerformer.change >= 0 ? 'price-up' : 'price-down' : ''}`;
+      renderAllocation(prices);
+    }
+
+    // ========== MODAL HELPERS ==========
+    function openModal(name) {
+      document.getElementById(`modal-${name}`).classList.remove('hidden');
+      document.getElementById(`modal-${name}`).classList.add('flex');
+    }
+    function closeModal(name) {
+      document.getElementById(`modal-${name}`).classList.add('hidden');
+      document.getElementById(`modal-${name}`).classList.remove('flex');
+    }
+
+    let toastTimer;
+    function showDemoNotice(message) {
+      const toast = document.getElementById('demo-toast');
+      toast.textContent = message;
+      toast.classList.remove('hidden');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.add('hidden'), 3000);
+    }
+
+    function ensureAuthenticated() {
+      fetch('/api/auth/session', { cache: 'no-store' }).then(response => {
+        if (!response.ok) window.location.replace('/auth');
+      }).catch(err => {
+        console.error('Could not validate the current account session', err);
+        window.location.replace('/auth');
+      });
+    }
+
+    ensureAuthenticated();
+
+    function toggleMenu() {
+      const menu = document.getElementById('mobile-nav');
+      const button = document.getElementById('menu-toggle');
+      const isOpen = menu.classList.toggle('is-open');
+      button.setAttribute('aria-expanded', String(isOpen));
+      button.setAttribute('aria-label', isOpen ? 'Close navigation menu' : 'Open navigation menu');
+    }
+
+    function closeMenu() {
+      const menu = document.getElementById('mobile-nav');
+      const button = document.getElementById('menu-toggle');
+      menu.classList.remove('is-open');
+      button.setAttribute('aria-expanded', 'false');
+      button.setAttribute('aria-label', 'Open navigation menu');
+    }
+
+    function toggleNotifications() {
+      const panel = document.getElementById('notification-panel');
+      const button = document.getElementById('notification-bell');
+      const isOpen = panel.classList.toggle('hidden') === false;
+      button.setAttribute('aria-expanded', String(isOpen));
+    }
+
+    function closeNotifications() {
+      document.getElementById('notification-panel').classList.add('hidden');
+      document.getElementById('notification-bell').setAttribute('aria-expanded', 'false');
+    }
+
+    function copyDepositAddress() {
+      const address = document.getElementById('deposit-address').textContent;
+      if (!address) {
+        showDemoNotice('Generate a deposit address first.');
+        return;
+      }
+      navigator.clipboard.writeText(address)
+        .then(() => showDemoNotice('Deposit address copied.'))
+        .catch(err => {
+          console.error('Could not copy deposit address', err);
+          showDemoNotice('Could not copy the address. Select and copy it manually.');
+        });
+    }
+
+    let selectedDepositOption;
+    let depositAddressReady = false;
+    let creatingDepositAddress = false;
+    let availableDepositOptions = [];
+    function clearDepositAddress() {
+      document.getElementById('deposit-qr').classList.add('hidden');
+      document.getElementById('deposit-qr').removeAttribute('src');
+      const address = document.getElementById('deposit-address');
+      address.classList.add('hidden');
+      address.textContent = '';
+      document.getElementById('copy-deposit-address').classList.add('hidden');
+      document.getElementById('deposit-status').textContent = '';
+      document.getElementById('deposit-error').classList.add('hidden');
+    }
+
+    function updateDepositButton() {
+      document.getElementById('generate-deposit').disabled =
+        creatingDepositAddress
+        || !depositAddressReady
+        || !selectedDepositOption;
+    }
+
+    async function loadDepositAddressConfiguration() {
+      const help = document.getElementById('deposit-api-help');
+      try {
+        const response = await fetch('/api/deposits/options', { cache: 'no-store' });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || `Could not load deposit configuration (${response.status})`);
+        depositAddressReady = result.addressGenerationReady === true;
+        availableDepositOptions = result.depositOptions || [];
+        renderSupportedPaymentOptions(availableDepositOptions);
+        if (!depositAddressReady) {
+          help.textContent = 'Configure BTC_ACCOUNT_XPUB, EVM_ACCOUNT_XPUB, and TRON_ACCOUNT_XPUB with public extended keys, then restart the server.';
+        } else {
+          help.textContent = 'Unique addresses are derived from public keys. Private keys never leave your wallet.';
+        }
+        updateDepositButton();
+      } catch (err) {
+        console.error('Could not load deposit address configuration', err);
+        help.textContent = 'Deposit address configuration is unavailable. Check the server and try again.';
+        document.getElementById('deposit-supported-payments').textContent =
+          'Deposit options are unavailable. Check the local server.';
+      }
+    }
+
+    function renderSupportedPaymentOptions(groups) {
+      const container = document.getElementById('deposit-supported-payments');
+      if (!Array.isArray(groups) || groups.length === 0) {
+        container.textContent = 'No supported deposit options were returned by the server.';
+        return;
+      }
+
+      const optionsByAsset = new Map();
+      groups.flatMap(group => group.options).forEach(option => {
+        if (!optionsByAsset.has(option.asset)) optionsByAsset.set(option.asset, []);
+        optionsByAsset.get(option.asset).push(option);
+      });
+
+      container.replaceChildren(...Array.from(optionsByAsset, ([asset, options]) => {
+        const section = document.createElement('section');
+        section.className = 'rounded-xl border border-gray-700 bg-gray-900 p-2.5';
+        const title = document.createElement('h4');
+        title.className = 'text-xs font-semibold text-gray-100 mb-2';
+        title.textContent = asset;
+        const list = document.createElement('div');
+        list.className = 'flex flex-wrap gap-1.5';
+        options.forEach(option => {
+          const chip = document.createElement('button');
+          chip.type = 'button';
+          chip.dataset.action = 'select-deposit-option';
+          chip.dataset.asset = option.asset;
+          chip.dataset.network = option.network;
+          chip.disabled = option.addressReady !== true;
+          const isSelected = selectedDepositOption?.asset === option.asset
+            && selectedDepositOption?.network === option.network;
+          chip.setAttribute('aria-pressed', String(isSelected));
+          chip.className = isSelected
+            ? 'rounded-full border border-indigo-400 bg-indigo-900 px-2 py-1 text-[11px] text-indigo-100'
+            : 'rounded-full border border-gray-700 px-2 py-1 text-[11px] text-gray-300 hover:border-indigo-400 disabled:cursor-not-allowed disabled:opacity-40';
+          const networkLabel = option.label.startsWith(`${asset} · `)
+            ? option.label.slice(asset.length + 3)
+            : option.network || option.label;
+          chip.textContent = networkLabel;
+          if (!option.addressReady) chip.title = 'Configure the public extended key for this network.';
+          list.append(chip);
+        });
+        section.append(title, list);
+        return section;
+      }));
+    }
+
+    async function generateDepositAddress() {
+      const button = document.getElementById('generate-deposit');
+      const error = document.getElementById('deposit-error');
+      if (!selectedDepositOption) {
+        error.textContent = 'Choose an asset and network first.';
+        error.classList.remove('hidden');
+        return;
+      }
+      if (location.protocol === 'file:') {
+        error.textContent = 'Deposit addresses require the local API server. Run npm start, then open http://127.0.0.1:3000.';
+        error.classList.remove('hidden');
+        return;
+      }
+      creatingDepositAddress = true;
+      updateDepositButton();
+      button.textContent = 'Generating address…';
+      error.classList.add('hidden');
+
+      try {
+        const response = await fetch('/api/deposits/address', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(selectedDepositOption),
+        });
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+          throw new Error(response.ok
+            ? 'Deposit service returned an unexpected response.'
+            : `Deposit service returned HTTP ${response.status}.`);
+        }
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || `Request failed (${response.status})`);
+
+        const address = document.getElementById('deposit-address');
+        address.textContent = result.address;
+        address.classList.remove('hidden');
+        const qr = document.getElementById('deposit-qr');
+        qr.src = result.qrCode;
+        qr.classList.remove('hidden');
+        document.getElementById('copy-deposit-address').classList.remove('hidden');
+        document.getElementById('deposit-status').textContent =
+          `Unique ${result.asset} address on ${result.network} generated.`;
+      } catch (err) {
+        console.error('Could not create deposit address', err);
+        error.textContent = err instanceof TypeError
+          ? 'Deposit service is unavailable. Start the local server with npm start and open this page from http://127.0.0.1:3000.'
+          : err.message;
+        error.classList.remove('hidden');
+      } finally {
+        creatingDepositAddress = false;
+        updateDepositButton();
+        button.textContent = 'Generate unique address';
+      }
+    }
+
+    function refreshPrices() {
+      render();
+    }
+
+    // Initial load + auto refresh every 60s
+    document.querySelectorAll('.chart-range').forEach(button => {
+      button.addEventListener('click', () => renderChart(button.dataset.range));
+    });
+    document.addEventListener('click', event => {
+      const trigger = event.target.closest('[data-action]');
+      if (!trigger) {
+        if (!event.target.closest('.navbar')) {
+          closeMenu();
+          closeNotifications();
+        }
+        return;
+      }
+      const { action, modal, message } = trigger.dataset;
+      switch (action) {
+        case 'toggle-notifications':
+          toggleNotifications();
+          break;
+        case 'toggle-menu':
+          toggleMenu();
+          break;
+        case 'logout':
+          closeMenu();
+          fetch('/api/auth/logout', { method: 'POST' })
+            .then(() => window.location.href = '/auth?logout=1')
+            .catch(err => {
+              console.error('Could not sign out', err);
+              showDemoNotice('Could not sign out. Please try again.');
+            });
+          break;
+        case 'refresh-prices':
+          refreshPrices();
+          break;
+        case 'open-modal':
+          openModal(modal);
+          break;
+        case 'close-modal':
+          closeModal(modal);
+          break;
+        case 'select-deposit-option':
+          selectedDepositOption = {
+            asset: trigger.dataset.asset,
+            network: trigger.dataset.network,
+          };
+          clearDepositAddress();
+          renderSupportedPaymentOptions(availableDepositOptions);
+          updateDepositButton();
+          break;
+        case 'copy-deposit-address':
+          copyDepositAddress();
+          break;
+        case 'generate-deposit-address':
+          generateDepositAddress();
+          break;
+        case 'demo-alert':
+          alert(message);
+          break;
+        default:
+          break;
+      }
+    });
+
+    updateDepositButton();
+    clearDepositAddress();
+    loadDepositAddressConfiguration();
+    renderChart('1M');
+    render();
+    setInterval(render, 60000);
+    if (new URLSearchParams(location.search).has('deposit')) openModal('deposit');
+
+    document.addEventListener('click', event => {
+      if (!event.target.closest('.navbar')) {
+        closeMenu();
+        closeNotifications();
+      }
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') {
+        closeMenu();
+        closeNotifications();
+      }
+    });
+
+    // Close modal on backdrop click
+    document.querySelectorAll('[id^="modal-"]').forEach(modal => {
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+          modal.classList.add('hidden');
+          modal.classList.remove('flex');
+        }
+      });
+    });
+  </script>
+</body>
+</html>

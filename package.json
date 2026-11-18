@@ -1,0 +1,28 @@
+{
+  "name": "cryptovault-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CryptoVault self-custody deposit address prototype",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test",
+    "sweep:dry-run": "node sweep-dry-run.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.2.0",
+    "bip32": "^4.0.0",
+    "bitcoinjs-lib": "^6.1.7",
+    "bs58": "^6.0.0",
+    "bs58check": "^4.0.0",
+    "dotenv": "^16.6.1",
+    "ethers": "^6.15.0",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.1.0",
+    "helmet": "^8.1.0",
+    "qrcode": "^1.5.4",
+    "tiny-secp256k1": "^2.2.4"
+  }
+}

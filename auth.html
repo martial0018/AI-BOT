@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dexipool | Account Access</title>
+    <style>
+      :root {
+        --bg: #000000;
+        --bg-2: #071814;
+        --panel: rgba(10, 12, 11, 0.92);
+        --panel-alt: rgba(14, 18, 16, 0.96);
+        --line: #202a24;
+        --line-soft: #2d3a32;
+        --text: #f8fafc;
+        --muted: #9aa8a0;
+        --muted-2: #b6c2bb;
+        --green: #00e676;
+        --green-soft: rgba(0, 230, 118, 0.12);
+        --green-strong: #16c773;
+        --shadow: rgba(0, 0, 0, 0.45);
+        --danger: #ff6b6b;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        margin: 0;
+        min-height: 100%;
+        font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      body {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background-image:
+          radial-gradient(ellipse at 50% 0%, rgba(0, 230, 118, 0.15) 0%, transparent 50%),
+          linear-gradient(to bottom, rgba(0, 40, 20, 0.4) 0%, #000000 40%);
+        padding: 20px;
+      }
+
+      .container {
+        width: min(100%, 500px);
+      }
+
+      .header {
+        text-align: center;
+        margin-bottom: 24px;
+      }
+
+      .header h1 {
+        margin: 0 0 8px;
+        font-size: clamp(2rem, 4vw, 2.75rem);
+        font-weight: 700;
+        letter-spacing: -0.04em;
+      }
+
+      .header p {
+        margin: 0;
+        font-size: 0.98rem;
+        color: var(--muted);
+      }
+
+      .auth-buttons {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        margin: 0 auto 18px;
+        width: min(100%, 420px);
+        background: rgba(15, 17, 16, 0.75);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 6px;
+      }
+
+      .auth-button {
+        flex: 1;
+        border: 0;
+        border-radius: 10px;
+        background: transparent;
+        color: var(--muted-2);
+        font-weight: 700;
+        font-size: 0.95rem;
+        padding: 12px 16px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+
+      .auth-button.active {
+        background: linear-gradient(180deg, rgba(26, 244, 145, 0.15), rgba(13, 17, 15, 0.9));
+        color: #f5fff9;
+        box-shadow: inset 0 0 0 1px rgba(0, 230, 118, 0.22);
+      }
+
+      .form-container {
+        background: rgba(13, 18, 16, 0.96);
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        padding: 28px 28px 20px;
+        box-shadow: 0 25px 60px rgba(0,0,0,0.68), 0 0 35px rgba(0,230,118,0.06);
+      }
+
+      .form-title {
+        margin: 0 0 8px;
+        font-size: 1.9rem;
+        line-height: 1.1;
+        letter-spacing: -0.035em;
+      }
+
+      .form-subtitle {
+        margin: 0 0 22px;
+        font-size: 0.96rem;
+        color: var(--muted);
+      }
+
+      form {
+        display: grid;
+        gap: 16px;
+      }
+
+      .form-group {
+        display: grid;
+        gap: 8px;
+      }
+
+      .signup-only.hidden {
+        display: none;
+      }
+
+      .form-label {
+        color: #dfe9e3;
+        font-size: 0.82rem;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+      }
+
+      .form-input {
+        width: 100%;
+        background: rgba(5, 10, 8, 0.8);
+        border: 1px solid #1f2d28;
+        border-radius: 10px;
+        color: var(--text);
+        font-size: 0.96rem;
+        padding: 13px 14px;
+        outline: none;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+      }
+
+      .form-input::placeholder {
+        color: rgba(148, 163, 184, 0.8);
+      }
+
+      .form-input:focus {
+        border-color: rgba(0, 230, 118, 0.6);
+        box-shadow: 0 0 0 3px rgba(0, 230, 118, 0.12);
+      }
+
+      .password-input, .phone-input {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .password-input .form-input,
+      .phone-input .form-input {
+        flex: 1;
+      }
+
+      .phone-input .country-code {
+        width: 32%;
+        min-width: 110px;
+        background: rgba(5, 10, 8, 0.8);
+        color: #fff;
+        border: 1px solid #1f2d28;
+        border-radius: 10px;
+        padding: 12px 10px;
+        font-size: 0.9rem;
+      }
+
+      .eye-btn, .password-toggle {
+        width: 42px;
+        height: 42px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--line-soft);
+        border-radius: 10px;
+        background: rgba(7, 10, 9, 0.9);
+        color: #dfefe8;
+        cursor: pointer;
+      }
+
+      .login-only {
+        margin-top: -8px;
+        margin-bottom: 8px;
+      }
+
+      .forgot-link {
+        color: #a8d8b8;
+        text-decoration: none;
+        font-size: 0.82rem;
+        font-weight: 600;
+      }
+
+      .forgot-link:hover {
+        text-decoration: underline;
+      }
+
+      .submit-btn {
+        margin-top: 6px;
+        width: 100%;
+        border: 0;
+        border-radius: 12px;
+        background: linear-gradient(135deg, #18d77d, #10ab5b);
+        color: #031b11;
+        font-weight: 800;
+        font-size: 1rem;
+        letter-spacing: -0.02em;
+        padding: 15px 18px;
+        cursor: pointer;
+        box-shadow: 0 10px 30px rgba(16, 171, 91, 0.25);
+      }
+
+      .submit-btn:hover {
+        filter: brightness(1.02);
+      }
+
+      .country-select select,
+      .country-input {
+        width: 100%;
+      }
+
+      .hidden {
+        display: none !important;
+      }
+
+      .login-only[style*="display: none"] {
+        display: none !important;
+      }
+
+      @media (max-width: 560px) {
+        .form-container {
+          padding: 22px 18px 16px;
+        }
+
+        .header h1 {
+          font-size: 2.1rem;
+        }
+
+        .phone-input {
+          flex-wrap: wrap;
+        }
+
+        .phone-input .country-code {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>Welcome to Dexipool</h1>
+        <p>Your trusted platform for cryptocurrency trading</p>
+      </div>
+
+      <div class="auth-buttons">
+        <button class="auth-button" id="loginBtn" type="button">Login</button>
+        <button class="auth-button active" id="signupBtn" type="button">Sign Up</button>
+      </div>
+
+      <div class="form-container">
+        <h2 class="form-title" id="formTitle">Create an account</h2>
+        <p class="form-subtitle" id="formSubtitle">Enter your details to create a new account</p>
+
+        <form id="authForm">
+          <div class="form-group signup-only" id="nameGroup">
+            <label class="form-label">Full Name</label>
+            <input type="text" name="name" class="form-input" placeholder="John Doe" required />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Email</label>
+            <input type="email" name="email" class="form-input" placeholder="your@email.com" required />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Password</label>
+            <div class="password-input">
+              <input type="password" id="loginPassword" name="password" class="form-input" placeholder="At least 12 characters" minlength="12" maxlength="128" required />
+              <button type="button" class="eye-btn" onclick="togglePwd('loginPassword', this)" title="Show/hide password" aria-label="Toggle password visibility">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path>
+                  <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="form-group signup-only" id="confirmPasswordGroup">
+            <label class="form-label">Confirm Password</label>
+            <div class="password-input">
+              <input type="password" id="confirmPassword" name="password_confirmation" class="form-input" placeholder="Confirm your password" minlength="12" maxlength="128" required />
+              <button type="button" class="eye-btn" onclick="togglePwd('confirmPassword', this)" title="Show/hide password" aria-label="Toggle password visibility">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path>
+                  <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <button type="submit" class="submit-btn" id="submitBtn">
+            <span class="login-text" style="display: none;">Login</span>
+            <span class="signup-text" style="display: block;">Create Account</span>
+          </button>
+          <p id="auth-error" role="alert" style="display:none; color:#fca5a5; margin-top:14px;"></p>
+        </form>
+      </div>
+    </div>
+
+    <script>
+      const loginBtn = document.getElementById('loginBtn');
+      const signupBtn = document.getElementById('signupBtn');
+      const formTitle = document.getElementById('formTitle');
+      const formSubtitle = document.getElementById('formSubtitle');
+      const signupOnlyFields = document.querySelectorAll('.signup-only');
+      const loginOnlyFields = document.querySelectorAll('.login-only');
+      const signupText = document.querySelector('.signup-text');
+      const loginText = document.querySelector('.login-text');
+      const authForm = document.getElementById('authForm');
+      let mode = 'signup';
+
+      function redirectToDashboard() {
+        window.location.href = '/dashboard';
+      }
+
+      async function redirectIfAuthenticated() {
+        try {
+          const response = await fetch('/api/auth/session', { cache: 'no-store' });
+          if (response.ok) redirectToDashboard();
+        } catch (error) {
+          console.error('Could not validate account session', error);
+        }
+      }
+
+      function showLoginForm() {
+        mode = 'login';
+        loginBtn.classList.add('active');
+        signupBtn.classList.remove('active');
+
+        signupOnlyFields.forEach((field) => {
+          field.classList.add('hidden');
+          const inputs = field.querySelectorAll('input, select');
+          inputs.forEach((input) => {
+            input.removeAttribute('required');
+            input.disabled = true;
+          });
+        });
+
+        loginOnlyFields.forEach((field) => {
+          field.style.display = 'block';
+        });
+
+        formTitle.textContent = 'Welcome back';
+        formSubtitle.textContent = 'Enter your credentials to access your account';
+        loginText.style.display = 'block';
+        signupText.style.display = 'none';
+      }
+
+      function showSignupForm() {
+        mode = 'signup';
+        signupBtn.classList.add('active');
+        loginBtn.classList.remove('active');
+
+        signupOnlyFields.forEach((field) => {
+          field.classList.remove('hidden');
+          const inputs = field.querySelectorAll('input, select');
+          inputs.forEach((input) => {
+            input.disabled = false;
+            if (['name', 'country', 'password_confirmation'].includes(input.name)) {
+              input.setAttribute('required', 'required');
+            }
+          });
+        });
+
+        loginOnlyFields.forEach((field) => {
+          field.style.display = 'none';
+        });
+
+        formTitle.textContent = 'Create an account';
+        formSubtitle.textContent = 'Enter your details to create a new account';
+        signupText.style.display = 'block';
+        loginText.style.display = 'none';
+      }
+
+      loginBtn.addEventListener('click', showLoginForm);
+      signupBtn.addEventListener('click', showSignupForm);
+
+      authForm.addEventListener('submit', async function (e) {
+        e.preventDefault();
+        const email = authForm.elements.namedItem('email').value.trim();
+        const password = authForm.elements.namedItem('password').value;
+        const error = document.getElementById('auth-error');
+        const submitButton = document.getElementById('submitBtn');
+        error.style.display = 'none';
+        if (!email || !password) {
+          error.textContent = 'Please provide both email and password.';
+          error.style.display = 'block';
+          return;
+        }
+
+        const payload = { email, password };
+        if (mode === 'signup') {
+          payload.name = authForm.elements.namedItem('name').value.trim();
+          payload.passwordConfirmation = authForm.elements.namedItem('password_confirmation').value;
+        }
+
+        submitButton.disabled = true;
+        try {
+          const response = await fetch(`/api/auth/${mode === 'signup' ? 'register' : 'login'}`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || `Authentication failed (${response.status}).`);
+          redirectToDashboard();
+        } catch (err) {
+          console.error('Authentication request failed', err);
+          error.textContent = err.message || 'Could not authenticate. Please try again.';
+          error.style.display = 'block';
+        } finally {
+          submitButton.disabled = false;
+        }
+      });
+
+      redirectIfAuthenticated();
+
+      const params = new URLSearchParams(window.location.search);
+      if (params.has('logout')) {
+        showLoginForm();
+      } else {
+        showSignupForm();
+      }
+    </script>
+
+    <script>
+      function togglePwd(fieldId, btn) {
+        const input = document.getElementById(fieldId);
+        const openIcon = `
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path>
+            <circle cx="12" cy="12" r="3"></circle>
+          </svg>`;
+        const closedIcon = `
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"></path>
+            <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"></path>
+            <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"></path>
+            <line x1="2" y1="2" x2="22" y2="22"></line>
+          </svg>`;
+
+        if (input && input.type === 'password') {
+          input.type = 'text';
+          btn.innerHTML = closedIcon;
+        } else if (input) {
+          input.type = 'password';
+          btn.innerHTML = openIcon;
+        }
+      }
+    </script>
+  </body>
+</html>
