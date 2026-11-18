@@ -31,6 +31,18 @@ test.after(() => {
   fs.rmSync(testDataDirectory, { recursive: true, force: true });
 });
 
+test('Vercel bundles the HTML pages and secp256k1 WASM runtime asset', () => {
+  const vercelConfig = JSON.parse(fs.readFileSync(path.join(__dirname, 'vercel.json'), 'utf8'));
+  assert.equal(
+    vercelConfig.functions['server.js'].includeFiles,
+    '{*.html,node_modules/tiny-secp256k1/lib/secp256k1.wasm}'
+  );
+  assert.equal(
+    fs.existsSync(path.join(__dirname, 'node_modules', 'tiny-secp256k1', 'lib', 'secp256k1.wasm')),
+    true
+  );
+});
+
 test('Vercel cold start exports Express and reports missing persistent storage without crashing', async () => {
   const script = `
     const app = require('./server');

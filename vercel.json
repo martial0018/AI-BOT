@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "server.js": {
-      "includeFiles": "*.html"
+      "includeFiles": "{*.html,node_modules/tiny-secp256k1/lib/secp256k1.wasm}"
     }
   }
 }
