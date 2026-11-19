@@ -30,8 +30,8 @@ const publicPages = new Map([
 const app = express();
 const isVercelRuntime = process.env.VERCEL === '1';
 if (process.env.TRUST_PROXY === 'true' || isVercelRuntime) app.set('trust proxy', 1);
-const databaseUrl = process.env.DATABASE_URL_POOLED
-  || process.env.DATABASE_URL
+const databaseUrl = process.env.DATABASE_URL
+  || process.env.DATABASE_URL_POOLED
   || process.env.POSTGRES_URL
   || process.env.DATABASE_POSTGRES_URL
   || process.env.DATABASE_PRISMA_DATABASE_URL;
