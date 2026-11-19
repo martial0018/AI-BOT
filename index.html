@@ -609,13 +609,35 @@
 
       <div class="space-y-4">
         <p id="deposit-api-help" class="text-xs text-gray-500">Checking deposit address configuration…</p>
-        <div>
-          <p class="text-sm text-gray-300 mb-2">Choose an asset and network</p>
-          <p class="text-xs text-gray-500 mb-2">Only send the selected asset on the selected network to its address.</p>
-          <div id="deposit-supported-payments" class="grid grid-cols-2 gap-2" aria-live="polite">
+        <p id="deposit-step-indicator" class="text-xs font-medium text-indigo-300" aria-live="polite">Step 1 of 3 · Amount</p>
+        <section id="deposit-step-amount" class="space-y-3">
+          <label for="deposit-amount" class="block text-sm text-gray-300">Step 1: Enter amount (USD)</label>
+          <input id="deposit-amount" type="number" min="0.01" step="0.01" inputmode="decimal"
+            class="w-full rounded-xl border border-gray-700 bg-gray-900 px-3 py-3 text-white"
+            placeholder="0.00" aria-describedby="deposit-amount-help">
+          <p id="deposit-amount-help" class="text-xs text-gray-500">Reference amount only. This is not a quote, minimum, or credited balance.</p>
+          <p id="deposit-amount-error" class="hidden text-sm text-red-300" role="alert"></p>
+          <button type="button" data-action="deposit-next-asset" class="w-full bg-indigo-600 hover:bg-indigo-500 py-3 rounded-xl font-medium">
+            Continue to asset
+          </button>
+        </section>
+        <section id="deposit-step-asset" class="hidden space-y-3">
+          <p class="text-sm text-gray-300">Step 2: Choose an asset</p>
+          <div id="deposit-supported-assets" class="grid grid-cols-2 gap-2" aria-live="polite">
             <p class="text-xs text-gray-500">Loading deposit options…</p>
           </div>
-        </div>
+          <button type="button" data-action="deposit-back-amount" class="text-sm text-indigo-300 hover:text-indigo-200">
+            Back to amount
+          </button>
+        </section>
+        <section id="deposit-step-network" class="hidden space-y-3">
+          <p id="deposit-network-heading" class="text-sm text-gray-300">Step 3: Choose a network</p>
+          <p class="text-xs text-gray-500">Only send the selected asset on the selected network to its address.</p>
+          <div id="deposit-supported-networks" class="grid grid-cols-2 gap-2" aria-live="polite"></div>
+          <button type="button" data-action="deposit-back-asset" class="text-sm text-indigo-300 hover:text-indigo-200">
+            Back to asset
+          </button>
+        </section>
         <div class="bg-gray-900 rounded-xl p-4 text-sm">
           <div class="flex flex-col items-center gap-3 sm:flex-row">
             <img id="deposit-qr" class="hidden h-36 w-36 rounded-lg bg-white p-2" alt="QR code for deposit address">
@@ -631,7 +653,7 @@
           <p id="deposit-warning" class="text-xs text-amber-300 mt-3">Automatic on-chain monitoring is not configured. Do not send funds yet; deposits will not be detected or credited automatically.</p>
           <p id="deposit-error" class="hidden text-sm text-red-300 mt-3" role="alert"></p>
         </div>
-        <button id="generate-deposit" data-action="generate-deposit-address" class="w-full bg-indigo-600 hover:bg-indigo-500 py-3 rounded-xl font-medium transition disabled:cursor-not-allowed disabled:opacity-50" disabled>
+        <button id="generate-deposit" data-action="generate-deposit-address" class="hidden w-full bg-indigo-600 hover:bg-indigo-500 py-3 rounded-xl font-medium transition disabled:cursor-not-allowed disabled:opacity-50" disabled>
           Generate unique address
         </button>
       </div>
@@ -1012,6 +1034,9 @@
     }
 
     let selectedDepositOption;
+    let selectedDepositAsset;
+    let depositAmountUsdCents;
+    let depositStep = 'amount';
     let depositAddressReady = false;
     let creatingDepositAddress = false;
     let availableDepositOptions = [];
@@ -1024,13 +1049,45 @@
       document.getElementById('copy-deposit-address').classList.add('hidden');
       document.getElementById('deposit-status').textContent = '';
       document.getElementById('deposit-error').classList.add('hidden');
+      updateDepositButton();
     }
 
     function updateDepositButton() {
-      document.getElementById('generate-deposit').disabled =
+      const button = document.getElementById('generate-deposit');
+      button.classList.toggle('hidden', depositStep !== 'network');
+      button.disabled =
         creatingDepositAddress
         || !depositAddressReady
-        || !selectedDepositOption;
+        || !selectedDepositOption
+        || !depositAmountUsdCents;
+    }
+
+    function setDepositStep(step) {
+      depositStep = step;
+      document.getElementById('deposit-step-amount').classList.toggle('hidden', step !== 'amount');
+      document.getElementById('deposit-step-asset').classList.toggle('hidden', step !== 'asset');
+      document.getElementById('deposit-step-network').classList.toggle('hidden', step !== 'network');
+      document.getElementById('deposit-step-indicator').textContent = {
+        amount: 'Step 1 of 3 · Amount',
+        asset: 'Step 2 of 3 · Asset',
+        network: 'Step 3 of 3 · Network',
+      }[step];
+      updateDepositButton();
+    }
+
+    function parseDepositAmountUsdCents(value) {
+      const match = /^(\d{1,12})(?:\.(\d{1,2}))?$/.exec(value.trim());
+      if (!match) return null;
+      const cents = Number(match[1]) * 100 + Number((match[2] || '').padEnd(2, '0'));
+      return Number.isSafeInteger(cents) && cents > 0 ? cents : null;
+    }
+
+    function formatDepositAmountUsd(cents) {
+      return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: 'USD',
+        minimumFractionDigits: 2,
+      }).format(cents / 100);
     }
 
     async function loadDepositAddressConfiguration() {
@@ -1051,62 +1108,65 @@
       } catch (err) {
         console.error('Could not load deposit address configuration', err);
         help.textContent = 'Deposit address configuration is unavailable. Check the server and try again.';
-        document.getElementById('deposit-supported-payments').textContent =
+        document.getElementById('deposit-supported-assets').textContent =
           'Deposit options are unavailable. Check the local server.';
+        document.getElementById('deposit-supported-networks').replaceChildren();
       }
     }
 
     function renderSupportedPaymentOptions(groups) {
-      const container = document.getElementById('deposit-supported-payments');
-      if (!Array.isArray(groups) || groups.length === 0) {
-        container.textContent = 'No supported deposit options were returned by the server.';
+      const assetContainer = document.getElementById('deposit-supported-assets');
+      const networkContainer = document.getElementById('deposit-supported-networks');
+      const options = Array.isArray(groups) ? groups.flatMap(group => group.options) : [];
+      const readyOptions = options.filter(option => option.addressReady === true);
+      if (readyOptions.length === 0) {
+        assetContainer.textContent = 'No deposit assets are currently configured.';
+        networkContainer.replaceChildren();
         return;
       }
 
-      const optionsByAsset = new Map();
-      groups.flatMap(group => group.options).forEach(option => {
-        if (!optionsByAsset.has(option.asset)) optionsByAsset.set(option.asset, []);
-        optionsByAsset.get(option.asset).push(option);
-      });
+      const assets = [...new Set(readyOptions.map(option => option.asset))];
+      assetContainer.replaceChildren(...assets.map(asset => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.dataset.action = 'select-deposit-asset';
+        button.dataset.asset = asset;
+        button.setAttribute('aria-pressed', String(selectedDepositAsset === asset));
+        button.className = selectedDepositAsset === asset
+          ? 'rounded-xl border border-indigo-400 bg-indigo-900 px-3 py-3 text-sm text-indigo-100'
+          : 'rounded-xl border border-gray-700 bg-gray-900 px-3 py-3 text-sm text-gray-100 hover:border-indigo-400';
+        button.textContent = asset;
+        return button;
+      }));
 
-      container.replaceChildren(...Array.from(optionsByAsset, ([asset, options]) => {
-        const section = document.createElement('section');
-        section.className = 'rounded-xl border border-gray-700 bg-gray-900 p-2.5';
-        const title = document.createElement('h4');
-        title.className = 'text-xs font-semibold text-gray-100 mb-2';
-        title.textContent = asset;
-        const list = document.createElement('div');
-        list.className = 'flex flex-wrap gap-1.5';
-        options.forEach(option => {
-          const chip = document.createElement('button');
-          chip.type = 'button';
-          chip.dataset.action = 'select-deposit-option';
-          chip.dataset.asset = option.asset;
-          chip.dataset.network = option.network;
-          chip.disabled = option.addressReady !== true;
-          const isSelected = selectedDepositOption?.asset === option.asset
-            && selectedDepositOption?.network === option.network;
-          chip.setAttribute('aria-pressed', String(isSelected));
-          chip.className = isSelected
-            ? 'rounded-full border border-indigo-400 bg-indigo-900 px-2 py-1 text-[11px] text-indigo-100'
-            : 'rounded-full border border-gray-700 px-2 py-1 text-[11px] text-gray-300 hover:border-indigo-400 disabled:cursor-not-allowed disabled:opacity-40';
-          const networkLabel = option.label.startsWith(`${asset} · `)
-            ? option.label.slice(asset.length + 3)
-            : option.network || option.label;
-          chip.textContent = networkLabel;
-          if (!option.addressReady) chip.title = 'Configure the public extended key for this network.';
-          list.append(chip);
-        });
-        section.append(title, list);
-        return section;
+      const networkOptions = readyOptions.filter(option => option.asset === selectedDepositAsset);
+      document.getElementById('deposit-network-heading').textContent =
+        `Step 3: Choose a ${selectedDepositAsset || 'deposit'} network`;
+      networkContainer.replaceChildren(...networkOptions.map(option => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.dataset.action = 'select-deposit-network';
+        button.dataset.asset = option.asset;
+        button.dataset.network = option.network;
+        button.setAttribute('aria-pressed', String(
+          selectedDepositOption?.asset === option.asset
+            && selectedDepositOption?.network === option.network
+        ));
+        button.className = selectedDepositOption?.network === option.network
+          ? 'rounded-xl border border-indigo-400 bg-indigo-900 px-3 py-3 text-sm text-indigo-100'
+          : 'rounded-xl border border-gray-700 bg-gray-900 px-3 py-3 text-sm text-gray-100 hover:border-indigo-400';
+        button.textContent = option.label.startsWith(`${option.asset} · `)
+          ? option.label.slice(option.asset.length + 3)
+          : option.network;
+        return button;
       }));
     }
 
     async function generateDepositAddress() {
       const button = document.getElementById('generate-deposit');
       const error = document.getElementById('deposit-error');
-      if (!selectedDepositOption) {
-        error.textContent = 'Choose an asset and network first.';
+      if (!depositAmountUsdCents || !selectedDepositOption) {
+        error.textContent = 'Enter a USD reference amount, then choose an asset and network.';
         error.classList.remove('hidden');
         return;
       }
@@ -1124,7 +1184,7 @@
         const response = await fetch('/api/deposits/address', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(selectedDepositOption),
+          body: JSON.stringify({ ...selectedDepositOption, amountUsdCents: depositAmountUsdCents }),
         });
         const contentType = response.headers.get('content-type') || '';
         if (!contentType.includes('application/json')) {
@@ -1143,7 +1203,7 @@
         qr.classList.remove('hidden');
         document.getElementById('copy-deposit-address').classList.remove('hidden');
         document.getElementById('deposit-status').textContent =
-          `Unique ${result.asset} address on ${result.network} generated.`;
+          `Unique ${result.asset} address on ${result.network} generated. USD reference: ${formatDepositAmountUsd(result.amountUsdCents)} (not a quote or minimum).`;
       } catch (err) {
         console.error('Could not create deposit address', err);
         error.textContent = err instanceof TypeError
@@ -1200,7 +1260,45 @@
         case 'close-modal':
           closeModal(modal);
           break;
-        case 'select-deposit-option':
+        case 'deposit-next-asset': {
+          const amountInput = document.getElementById('deposit-amount');
+          depositAmountUsdCents = parseDepositAmountUsdCents(amountInput.value);
+          if (!depositAmountUsdCents) {
+            document.getElementById('deposit-amount-error').textContent =
+              'Enter a valid USD amount with up to two decimal places.';
+            document.getElementById('deposit-amount-error').classList.remove('hidden');
+            amountInput.focus();
+            break;
+          }
+          document.getElementById('deposit-amount-error').classList.add('hidden');
+          selectedDepositAsset = undefined;
+          selectedDepositOption = undefined;
+          clearDepositAddress();
+          renderSupportedPaymentOptions(availableDepositOptions);
+          setDepositStep('asset');
+          break;
+        }
+        case 'deposit-back-amount':
+          selectedDepositAsset = undefined;
+          selectedDepositOption = undefined;
+          clearDepositAddress();
+          renderSupportedPaymentOptions(availableDepositOptions);
+          setDepositStep('amount');
+          break;
+        case 'select-deposit-asset':
+          selectedDepositAsset = trigger.dataset.asset;
+          selectedDepositOption = undefined;
+          clearDepositAddress();
+          renderSupportedPaymentOptions(availableDepositOptions);
+          setDepositStep('network');
+          break;
+        case 'deposit-back-asset':
+          selectedDepositOption = undefined;
+          clearDepositAddress();
+          renderSupportedPaymentOptions(availableDepositOptions);
+          setDepositStep('asset');
+          break;
+        case 'select-deposit-network':
           selectedDepositOption = {
             asset: trigger.dataset.asset,
             network: trigger.dataset.network,
@@ -1223,8 +1321,15 @@
       }
     });
 
+    document.getElementById('deposit-amount').addEventListener('input', event => {
+      depositAmountUsdCents = parseDepositAmountUsdCents(event.target.value);
+      document.getElementById('deposit-amount-error').classList.add('hidden');
+      clearDepositAddress();
+    });
+
     updateDepositButton();
     clearDepositAddress();
+    setDepositStep('amount');
     loadDepositAddressConfiguration();
     renderChart('1M');
     render();

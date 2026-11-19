@@ -30,7 +30,11 @@ const publicPages = new Map([
 const app = express();
 const isVercelRuntime = process.env.VERCEL === '1';
 if (process.env.TRUST_PROXY === 'true' || isVercelRuntime) app.set('trust proxy', 1);
-const databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+const databaseUrl = process.env.DATABASE_URL
+  || process.env.DATABASE_URL_POOLED
+  || process.env.POSTGRES_URL
+  || process.env.DATABASE_POSTGRES_URL
+  || process.env.DATABASE_PRISMA_DATABASE_URL;
 let sqliteDatabase;
 let postgresPool;
 let databaseInitError;
@@ -76,7 +80,7 @@ if (databaseUrl) {
   postgresPool = new Pool({ connectionString: databaseUrl, max: 5, connectionTimeoutMillis: 5000 });
   databaseReady = postgresPool.query(postgresSchema).catch(error => {
     databaseInitError = error;
-    console.error('Persistent PostgreSQL initialization failed.');
+    console.error('Persistent PostgreSQL initialization failed:', error.code || 'database error');
   });
 } else if (!isVercelRuntime) {
   const Database = require('better-sqlite3');
@@ -736,6 +740,7 @@ app.get('/api/health', async (_req, res) => {
     mode: 'self-custody-addresses',
     monitoring: 'disabled',
     persistentStorage: ready ? 'configured' : configured ? 'unavailable' : 'unconfigured',
+    databaseErrorCode: databaseInitError?.code,
     setup: ready
       ? undefined
       : configured
@@ -762,13 +767,20 @@ app.get('/api/deposits/options', requireUser, (_req, res) => {
 });
 
 app.post('/api/deposits/address', requireSameOrigin, requireUser, async (req, res) => {
-  const { asset, network } = req.body || {};
+  const { asset, network, amountUsdCents } = req.body || {};
   if (typeof asset !== 'string' || typeof network !== 'string'
     || !depositOptionCodes[`${asset}:${network}`]) {
     return res.status(400).json({ error: 'Choose a supported asset and network.' });
   }
+  if (!Number.isSafeInteger(amountUsdCents) || amountUsdCents <= 0) {
+    return res.status(400).json({ error: 'Enter a valid USD reference amount.' });
+  }
   try {
-    const deposit = await createDepositAddress({ userId: req.user.id, asset, network });
+    const deposit = await createDepositAddress({
+      userId: req.user.id,
+      asset,
+      network,
+    });
     const qrCode = await QRCode.toDataURL(deposit.address, {
       errorCorrectionLevel: 'M',
       margin: 1,
@@ -777,6 +789,7 @@ app.post('/api/deposits/address', requireSameOrigin, requireUser, async (req, re
     });
     return res.status(201).json({
       ...deposit,
+      amountUsdCents,
       qrCode,
       monitoringReady: false,
       warning: 'On-chain monitoring is not configured. This address is not monitored or credited automatically.',

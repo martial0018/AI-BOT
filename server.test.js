@@ -231,20 +231,31 @@ test('registers accounts and allocates distinct, user-scoped deposit addresses',
   assert.equal(registration.status, 201);
   const cookie = registration.headers.get('set-cookie').split(';')[0];
 
-  const createAddress = async (asset, network) => {
+  const missingAmount = await request('/api/deposits/address', {
+    method: 'POST',
+    cookie,
+    body: JSON.stringify({ asset: 'ETH', network: 'Ethereum' }),
+  });
+  assert.equal(missingAmount.status, 400);
+
+  const createAddress = async (asset, network, amountUsdCents) => {
     const response = await request('/api/deposits/address', {
       method: 'POST',
       cookie,
-      body: JSON.stringify({ asset, network }),
+      body: JSON.stringify({ asset, network, amountUsdCents }),
     });
     assert.equal(response.status, 201);
     return response.json();
   };
-  const ethereum = await createAddress('ETH', 'Ethereum');
-  const arbitrum = await createAddress('ETH', 'Arbitrum');
+  const ethereum = await createAddress('ETH', 'Ethereum', 125050);
+  const arbitrum = await createAddress('ETH', 'Arbitrum', 2500);
   assert.match(ethereum.address, /^0x[0-9a-fA-F]{40}$/);
   assert.notEqual(ethereum.address, arbitrum.address);
+  assert.equal(ethereum.amountUsdCents, 125050);
   assert.equal(ethereum.monitoringReady, false);
+  const ethereumDetails = await request(`/api/deposits/address/${ethereum.id}`, { cookie });
+  assert.equal(ethereumDetails.status, 200);
+  assert.equal((await ethereumDetails.json()).address, ethereum.address);
 
   const secondRegistration = await request('/api/auth/register', {
     method: 'POST',
