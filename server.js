@@ -30,8 +30,8 @@ const publicPages = new Map([
 const app = express();
 const isVercelRuntime = process.env.VERCEL === '1';
 if (process.env.TRUST_PROXY === 'true' || isVercelRuntime) app.set('trust proxy', 1);
-const databaseUrl = process.env.DATABASE_URL
-  || process.env.DATABASE_URL_POOLED
+const databaseUrl = process.env.DATABASE_URL_POOLED
+  || process.env.DATABASE_URL
   || process.env.POSTGRES_URL
   || process.env.DATABASE_POSTGRES_URL
   || process.env.DATABASE_PRISMA_DATABASE_URL;
@@ -80,7 +80,10 @@ if (databaseUrl) {
   postgresPool = new Pool({ connectionString: databaseUrl, max: 5, connectionTimeoutMillis: 5000 });
   databaseReady = postgresPool.query(postgresSchema).catch(error => {
     databaseInitError = error;
-    console.error('Persistent PostgreSQL initialization failed:', error.code || 'database error');
+    console.error(
+      'Persistent PostgreSQL initialization failed:',
+      error.code || error.name || 'database error'
+    );
   });
 } else if (!isVercelRuntime) {
   const Database = require('better-sqlite3');
@@ -741,6 +744,7 @@ app.get('/api/health', async (_req, res) => {
     monitoring: 'disabled',
     persistentStorage: ready ? 'configured' : configured ? 'unavailable' : 'unconfigured',
     databaseErrorCode: databaseInitError?.code,
+    databaseErrorType: databaseInitError?.name,
     setup: ready
       ? undefined
       : configured
