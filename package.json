@@ -12,6 +12,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@turnkey/sdk-server": "^8.11.0",
     "better-sqlite3": "^12.2.0",
     "bip32": "^4.0.0",
     "bitcoinjs-lib": "^6.1.7",

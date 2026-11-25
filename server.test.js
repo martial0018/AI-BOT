@@ -9,6 +9,7 @@ const { promisify } = require('node:util');
 const { BIP32Factory } = require('bip32');
 const ecc = require('tiny-secp256k1');
 const { deriveSecpAddress, isValidSolanaAddress } = require('./wallet');
+const { deriveTurnkeyEvmAddress } = require('./turnkey');
 const testDataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'cryptovault-test-'));
 process.env.DATABASE_PATH = path.join(testDataDirectory, 'deposits.sqlite');
 const {
@@ -103,6 +104,102 @@ test('exposes address-ready status without returning public extended keys', () =
   assert.equal(JSON.stringify(options).includes('public-key'), false);
 });
 
+test('reports EVM address readiness from the selected provider configuration', () => {
+  const turnkeyEnvironment = {
+    DEPOSIT_EVM_PROVIDER: 'turnkey',
+    TURNKEY_ORGANIZATION_ID: 'org-id',
+    TURNKEY_WALLET_ID: 'wallet-id',
+    TURNKEY_EXPECTED_ETH_ADDRESS: '0x1111111111111111111111111111111111111111',
+    TURNKEY_API_PUBLIC_KEY: 'public-key',
+    TURNKEY_API_PRIVATE_KEY: 'private-key',
+  };
+  const turnkeyOptions = getDepositOptions(turnkeyEnvironment)
+    .flatMap(group => group.options);
+  assert.equal(
+    turnkeyOptions.filter(option => ['ethereum', 'arbitrum', 'bsc'].includes(option.networkCode))
+      .every(option => option.addressReady),
+    true
+  );
+  assert.equal(
+    getDepositOptions({ DEPOSIT_EVM_PROVIDER: 'turnkey' })
+      .flatMap(group => group.options)
+      .filter(option => ['ethereum', 'arbitrum', 'bsc'].includes(option.networkCode))
+      .some(option => option.addressReady),
+    false
+  );
+  assert.equal(
+    getDepositOptions({
+      ...turnkeyEnvironment,
+      VERCEL: '1',
+    }).flatMap(group => group.options).some(option => option.addressReady),
+    false
+  );
+  assert.equal(
+    getDepositOptions({
+      ...turnkeyEnvironment,
+      NODE_ENV: 'production',
+    }).flatMap(group => group.options).some(option => option.addressReady),
+    false
+  );
+});
+
+test('derives Turnkey EVM deposit accounts and verifies the known first address', async () => {
+  const expectedAddress = '0x1111111111111111111111111111111111111111';
+  const targetAddress = '0x2222222222222222222222222222222222222222';
+  const env = {
+    TURNKEY_ORGANIZATION_ID: 'org-id',
+    TURNKEY_WALLET_ID: 'wallet-id',
+    TURNKEY_EXPECTED_ETH_ADDRESS: expectedAddress,
+    TURNKEY_API_PUBLIC_KEY: 'public-key',
+    TURNKEY_API_PRIVATE_KEY: 'private-key',
+  };
+  const created = [];
+  const apiClient = {
+    getWalletAccounts: async ({ organizationId, walletId }) => {
+      assert.equal(organizationId, 'org-id');
+      assert.equal(walletId, 'wallet-id');
+      return {
+        accounts: [{
+          path: "m/44'/60'/0'/0/0",
+          address: expectedAddress,
+        }],
+      };
+    },
+    createWalletAccounts: async request => {
+      created.push(request);
+      assert.equal(request.organizationId, 'org-id');
+      return { addresses: [targetAddress] };
+    },
+  };
+
+  assert.equal(await deriveTurnkeyEvmAddress(0, env, apiClient), expectedAddress);
+  assert.equal(await deriveTurnkeyEvmAddress(7, env, apiClient), targetAddress);
+  assert.equal(created.length, 1);
+  assert.equal(created[0].accounts[0].path, "m/44'/60'/0'/0/7");
+  assert.equal(created[0].accounts[0].curve, 'CURVE_SECP256K1');
+  assert.equal(created[0].accounts[0].addressFormat, 'ADDRESS_FORMAT_ETHEREUM');
+});
+
+test('refuses to derive Turnkey deposit addresses when the known address does not match', async () => {
+  await assert.rejects(deriveTurnkeyEvmAddress(1, {
+    TURNKEY_ORGANIZATION_ID: 'org-id',
+    TURNKEY_WALLET_ID: 'wallet-id',
+    TURNKEY_EXPECTED_ETH_ADDRESS: '0x1111111111111111111111111111111111111111',
+    TURNKEY_API_PUBLIC_KEY: 'public-key',
+    TURNKEY_API_PRIVATE_KEY: 'private-key',
+  }, {
+    getWalletAccounts: async () => ({
+      accounts: [{
+        path: "m/44'/60'/0'/0/0",
+        address: '0x2222222222222222222222222222222222222222',
+      }],
+    }),
+    createWalletAccounts: async () => {
+      throw new Error('Should not create an account before verifying the wallet.');
+    },
+  }), /does not match TURNKEY_EXPECTED_ETH_ADDRESS/);
+});
+
 test('hashes account passwords with a per-password salt and verifies them safely', async () => {
   const password = 'correct horse battery staple 123';
   const credentials = await createPasswordHash(password);
@@ -184,6 +281,7 @@ test('registers accounts and allocates distinct, user-scoped deposit addresses',
     BTC_ACCOUNT_XPUB: process.env.BTC_ACCOUNT_XPUB,
     EVM_ACCOUNT_XPUB: process.env.EVM_ACCOUNT_XPUB,
     TRON_ACCOUNT_XPUB: process.env.TRON_ACCOUNT_XPUB,
+    NODE_ENV: process.env.NODE_ENV,
   };
   const btcAccount = bip32.fromSeed(Buffer.alloc(32, 17)).derivePath("m/84'/0'/0'");
   const evmAccount = bip32.fromSeed(Buffer.alloc(32, 18)).derivePath("m/44'/60'/0'");
@@ -191,6 +289,7 @@ test('registers accounts and allocates distinct, user-scoped deposit addresses',
   process.env.BTC_ACCOUNT_XPUB = btcAccount.neutered().toBase58();
   process.env.EVM_ACCOUNT_XPUB = evmAccount.neutered().toBase58();
   process.env.TRON_ACCOUNT_XPUB = tronAccount.neutered().toBase58();
+  process.env.NODE_ENV = 'test';
 
   const server = app.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -237,6 +336,20 @@ test('registers accounts and allocates distinct, user-scoped deposit addresses',
     body: JSON.stringify({ asset: 'ETH', network: 'Ethereum' }),
   });
   assert.equal(missingAmount.status, 400);
+
+  process.env.NODE_ENV = 'production';
+  const productionDisabled = await request('/api/deposits/address', {
+    method: 'POST',
+    cookie,
+    body: JSON.stringify({
+      asset: 'ETH',
+      network: 'Ethereum',
+      amountUsdCents: 5000,
+    }),
+  });
+  process.env.NODE_ENV = 'test';
+  assert.equal(productionDisabled.status, 503);
+  assert.match((await productionDisabled.json()).error, /disabled in production/);
 
   const createAddress = async (asset, network, amountUsdCents) => {
     const response = await request('/api/deposits/address', {

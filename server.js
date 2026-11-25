@@ -9,6 +9,7 @@ const rateLimit = require('express-rate-limit').rateLimit;
 const QRCode = require('qrcode');
 const { getSweepReadiness } = require('./sweeps');
 const { deriveSecpAddress } = require('./wallet');
+const { deriveTurnkeyEvmAddress, getTurnkeyConfiguration } = require('./turnkey');
 
 const scrypt = promisify(crypto.scrypt);
 const passwordHashN = 32768;
@@ -214,16 +215,31 @@ const depositDerivationFamilies = {
 };
 
 function getDepositOptions(env = process.env) {
+  const turnkeyConfigured = getTurnkeyConfiguration(env).configured;
+  const issuanceAllowed = isDepositAddressIssuanceAllowed(env);
   return getShieldzSupportedPaymentGroups().map(group => ({
     ...group,
     options: group.options.map(option => ({
       ...option,
       networkCode: depositOptionCodes[`${option.asset}:${option.network}`],
-      addressReady: Boolean(env[depositDerivationFamilies[
-        depositOptionCodes[`${option.asset}:${option.network}`]
-      ]?.envKey]?.trim()),
+      addressReady: issuanceAllowed && isDepositAddressReady(
+        depositOptionCodes[`${option.asset}:${option.network}`], env, turnkeyConfigured
+      ),
     })),
   }));
+}
+
+function isDepositAddressIssuanceAllowed(env = process.env) {
+  return env.VERCEL !== '1' && env.NODE_ENV !== 'production';
+}
+
+function isDepositAddressReady(networkCode, env, turnkeyConfigured) {
+  const familyConfig = depositDerivationFamilies[networkCode];
+  if (!familyConfig) return false;
+  const provider = env.DEPOSIT_EVM_PROVIDER?.trim().toLowerCase() || 'xpub';
+  if (familyConfig.family === 'evm' && provider === 'turnkey') return turnkeyConfigured;
+  if (familyConfig.family === 'evm' && provider !== 'xpub') return false;
+  return Boolean(env[familyConfig.envKey]?.trim());
 }
 
 function hashSessionToken(token) {
@@ -325,10 +341,20 @@ async function createDepositAddress({ userId, asset, network, env = process.env 
   const networkCode = depositOptionCodes[`${asset}:${network}`];
   const familyConfig = depositDerivationFamilies[networkCode];
   if (!networkCode || !familyConfig) throw new Error('Unsupported asset and network.');
-  if (!env[familyConfig.envKey]?.trim()) {
-    throw new Error(`Configure ${familyConfig.envKey} before creating deposit addresses.`);
+  const evmProvider = env.DEPOSIT_EVM_PROVIDER?.trim().toLowerCase() || 'xpub';
+  if (familyConfig.family === 'evm' && !['xpub', 'turnkey'].includes(evmProvider)) {
+    throw new Error('Configure DEPOSIT_EVM_PROVIDER as xpub or turnkey.');
+  }
+  if (familyConfig.family !== 'evm' || evmProvider === 'xpub') {
+    if (!env[familyConfig.envKey]?.trim()) {
+      throw new Error(`Configure ${familyConfig.envKey} before creating deposit addresses.`);
+    }
+  } else if (!getTurnkeyConfiguration(env).configured) {
+    const { missing } = getTurnkeyConfiguration(env);
+    throw new Error(`Configure ${missing[0]} before creating Turnkey deposit addresses.`);
   }
 
+  let index;
   if (postgresPool) {
     await ensureDatabaseReady();
     const client = await postgresPool.connect();
@@ -341,63 +367,53 @@ async function createDepositAddress({ userId, asset, network, env = process.env 
         DO UPDATE SET next_index = wallet_address_counters.next_index + 1
         RETURNING next_index - 1 AS "nextIndex"
       `, [familyConfig.family]);
-      const index = Number(row.nextIndex);
+      index = Number(row.nextIndex);
       if (!Number.isSafeInteger(index) || index >= 0x80000000) {
         throw new Error('Deposit address index limit reached.');
       }
-
-      const address = deriveSecpAddress(asset, networkCode, index, env);
-      const id = crypto.randomUUID();
-      const createdAt = new Date().toISOString();
-      await client.query(`
-        INSERT INTO wallet_deposits (
-          id, user_id, asset, network, address, derivation_family,
-          derivation_index, status, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'awaiting_payment', $8)
-      `, [id, userId, asset, network, address, familyConfig.family, index, createdAt]);
       await client.query('COMMIT');
-      return { id, asset, network, address, status: 'awaiting_payment', createdAt };
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
     } finally {
       client.release();
     }
-  }
-
-  const allocate = sqliteDatabase.transaction(() => {
-    let row = sqliteDatabase.prepare(`
-      SELECT next_index AS nextIndex
-      FROM wallet_address_counters WHERE derivation_family = ?
-    `).get(familyConfig.family);
-    if (!row) {
-      sqliteDatabase.prepare(`
-        INSERT INTO wallet_address_counters (derivation_family, next_index) VALUES (?, 1)
-      `).run(familyConfig.family);
-      row = { nextIndex: 0 };
-    } else {
+  } else {
+    const reserve = sqliteDatabase.transaction(() => {
+      const row = sqliteDatabase.prepare(`
+        SELECT next_index AS nextIndex
+        FROM wallet_address_counters WHERE derivation_family = ?
+      `).get(familyConfig.family);
+      if (!row) {
+        sqliteDatabase.prepare(`
+          INSERT INTO wallet_address_counters (derivation_family, next_index) VALUES (?, 1)
+        `).run(familyConfig.family);
+        return 0;
+      }
       sqliteDatabase.prepare(`
         UPDATE wallet_address_counters SET next_index = next_index + 1
         WHERE derivation_family = ?
       `).run(familyConfig.family);
-    }
-    const index = Number(row.nextIndex);
-    if (!Number.isSafeInteger(index) || index >= 0x80000000) {
-      throw new Error('Deposit address index limit reached.');
-    }
+      return Number(row.nextIndex);
+    });
+    index = reserve.immediate();
+  }
 
-    const address = deriveSecpAddress(asset, networkCode, index, env);
-    const id = crypto.randomUUID();
-    const createdAt = new Date().toISOString();
-    sqliteDatabase.prepare(`
-      INSERT INTO wallet_deposits (
-        id, user_id, asset, network, address, derivation_family,
-        derivation_index, status, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'awaiting_payment', ?)
-    `).run(id, userId, asset, network, address, familyConfig.family, index, createdAt);
-    return { id, asset, network, address, status: 'awaiting_payment', createdAt };
-  });
-  return allocate.immediate();
+  if (!Number.isSafeInteger(index) || index >= 0x80000000) {
+    throw new Error('Deposit address index limit reached.');
+  }
+  const address = familyConfig.family === 'evm' && evmProvider === 'turnkey'
+    ? await deriveTurnkeyEvmAddress(index, env)
+    : deriveSecpAddress(asset, networkCode, index, env);
+  const id = crypto.randomUUID();
+  const createdAt = new Date().toISOString();
+  await databaseRun(`
+    INSERT INTO wallet_deposits (
+      id, user_id, asset, network, address, derivation_family,
+      derivation_index, status, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'awaiting_payment', ?)
+  `, [id, userId, asset, network, address, familyConfig.family, index, createdAt]);
+  return { id, asset, network, address, status: 'awaiting_payment', createdAt };
 }
 
 app.disable('x-powered-by');
@@ -771,6 +787,11 @@ app.get('/api/deposits/options', requireUser, (_req, res) => {
 });
 
 app.post('/api/deposits/address', requireSameOrigin, requireUser, async (req, res) => {
+  if (!isDepositAddressIssuanceAllowed()) {
+    return res.status(503).json({
+      error: 'Deposit addresses are disabled in production until monitoring and crediting are verified.',
+    });
+  }
   const { asset, network, amountUsdCents } = req.body || {};
   if (typeof asset !== 'string' || typeof network !== 'string'
     || !depositOptionCodes[`${asset}:${network}`]) {
@@ -799,11 +820,17 @@ app.post('/api/deposits/address', requireSameOrigin, requireUser, async (req, re
       warning: 'On-chain monitoring is not configured. This address is not monitored or credited automatically.',
     });
   } catch (error) {
-    console.error('Deposit address creation failed:', error.message);
+    const networkCode = depositOptionCodes[`${asset}:${network}`];
+    const provider = depositDerivationFamilies[networkCode]?.family === 'evm'
+      ? process.env.DEPOSIT_EVM_PROVIDER?.trim().toLowerCase() || 'xpub'
+      : 'xpub';
+    console.error('Deposit address creation failed:', error.name || 'Error');
     return res.status(503).json({
       error: error.message.startsWith('Configure ')
         ? error.message
-        : 'Could not create a deposit address. Check the public extended-key configuration.',
+        : provider === 'turnkey'
+          ? 'Turnkey could not create the address. Check the wallet ID, API key permissions, and expected Ethereum address configuration.'
+          : 'Could not create a deposit address. Check the public extended-key configuration.',
     });
   }
 });
