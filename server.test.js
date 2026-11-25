@@ -10,6 +10,12 @@ const { BIP32Factory } = require('bip32');
 const ecc = require('tiny-secp256k1');
 const { deriveSecpAddress, isValidSolanaAddress } = require('./wallet');
 const { deriveTurnkeyEvmAddress } = require('./turnkey');
+const {
+  getMonitorConfiguration,
+  parseSepoliaPayload,
+  transferTopic,
+  verifyQuickNodeSignature,
+} = require('./deposit-monitor');
 const testDataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'cryptovault-test-'));
 process.env.DATABASE_PATH = path.join(testDataDirectory, 'deposits.sqlite');
 const {
@@ -19,6 +25,7 @@ const {
   isShieldzApiConfigured,
   getShieldzSupportedPaymentGroups,
   getDepositOptions,
+  createDepositAddress,
   createPasswordHash,
   verifyPassword,
   closeDatabase,
@@ -98,8 +105,10 @@ test('exposes address-ready status without returning public extended keys', () =
     TRON_ACCOUNT_XPUB: 'tron-public-key',
   }).flatMap(group => group.options);
 
-  assert.equal(options.length, 10);
-  assert.equal(options.every(option => option.addressReady), true);
+  assert.equal(options.length, 13);
+  assert.equal(options.filter(option => option.addressReady).length, 10);
+  assert.equal(options.filter(option => option.network === 'Sepolia')
+    .every(option => !option.addressReady), true);
   assert.equal(options.some(option => option.networkCode === 'arbitrum'), true);
   assert.equal(JSON.stringify(options).includes('public-key'), false);
 });
@@ -116,7 +125,8 @@ test('reports EVM address readiness from the selected provider configuration', (
   const turnkeyOptions = getDepositOptions(turnkeyEnvironment)
     .flatMap(group => group.options);
   assert.equal(
-    turnkeyOptions.filter(option => ['ethereum', 'arbitrum', 'bsc'].includes(option.networkCode))
+    turnkeyOptions.filter(option => option.network !== 'Sepolia'
+      && ['ethereum', 'arbitrum', 'bsc'].includes(option.networkCode))
       .every(option => option.addressReady),
     true
   );
@@ -141,6 +151,26 @@ test('reports EVM address readiness from the selected provider configuration', (
     }).flatMap(group => group.options).some(option => option.addressReady),
     false
   );
+  const sepoliaEnvironment = {
+    ...turnkeyEnvironment,
+    SEPOLIA_RPC_URL: 'https://sepolia.example',
+    QUICKNODE_STREAMS_SECRET: 'test-secret',
+    SEPOLIA_CONFIRMATIONS: '12',
+    SEPOLIA_DEPOSITS_ENABLED: 'true',
+    SEPOLIA_USDC_CONTRACT: '0x1111111111111111111111111111111111111111',
+  };
+  const sepoliaOptions = getDepositOptions(sepoliaEnvironment)
+    .flatMap(group => group.options)
+    .filter(option => option.network === 'Sepolia');
+  assert.equal(sepoliaOptions.find(option => option.asset === 'ETH').addressReady, true);
+  assert.equal(sepoliaOptions.find(option => option.asset === 'USDC').addressReady, true);
+  assert.equal(sepoliaOptions.find(option => option.asset === 'USDT').addressReady, false);
+  assert.equal(getDepositOptions({
+    ...sepoliaEnvironment,
+    VERCEL: '1',
+    SEPOLIA_DEPOSITS_ENABLED: 'false',
+  }).flatMap(group => group.options).some(option => option.network === 'Sepolia'
+    && option.addressReady), false);
 });
 
 test('derives Turnkey EVM deposit accounts and verifies the known first address', async () => {
@@ -198,6 +228,408 @@ test('refuses to derive Turnkey deposit addresses when the known address does no
       throw new Error('Should not create an account before verifying the wallet.');
     },
   }), /does not match TURNKEY_EXPECTED_ETH_ADDRESS/);
+});
+
+test('requires a Sepolia RPC, QuickNode signature secret, and valid confirmation count', () => {
+  assert.deepEqual(getMonitorConfiguration({}).missing, [
+    'SEPOLIA_RPC_URL',
+    'QUICKNODE_STREAMS_SECRET',
+    'SEPOLIA_CONFIRMATIONS',
+  ]);
+  const configured = getMonitorConfiguration({
+    SEPOLIA_RPC_URL: 'https://sepolia.example',
+    QUICKNODE_STREAMS_SECRET: 'test-secret',
+    SEPOLIA_CONFIRMATIONS: '12',
+    SEPOLIA_USDC_CONTRACT: '0x1111111111111111111111111111111111111111',
+  });
+  assert.equal(configured.configured, true);
+  assert.equal(configured.confirmations, 12);
+  assert.deepEqual(configured.tokens, {
+    USDC: '0x1111111111111111111111111111111111111111',
+  });
+  assert.equal(getMonitorConfiguration({
+    SEPOLIA_RPC_URL: 'https://sepolia.example',
+    QUICKNODE_STREAMS_SECRET: 'test-secret',
+    SEPOLIA_CONFIRMATIONS: '0',
+    SEPOLIA_USDT_CONTRACT: 'not-an-address',
+  }).configured, false);
+  assert.equal(getMonitorConfiguration({
+    SEPOLIA_RPC_URL: 'http://remote.example',
+    QUICKNODE_STREAMS_SECRET: 'test-secret',
+    SEPOLIA_CONFIRMATIONS: '12',
+  }).configured, false);
+});
+
+test('validates QuickNode Streams HMAC, timestamp, and nonce format', () => {
+  const crypto = require('node:crypto');
+  const secret = 'test-stream-secret';
+  const nonce = 'nonce-value-123';
+  const timestamp = String(Date.now());
+  const body = '{"chainId":"0xaa36a7","logs":[],"transactions":[]}';
+  const signature = crypto.createHmac('sha256', secret)
+    .update(nonce + timestamp + body)
+    .digest('hex');
+  const signed = { secret, nonce, timestamp, signature, body };
+
+  assert.equal(verifyQuickNodeSignature(signed), true);
+  assert.equal(verifyQuickNodeSignature({ ...signed, body: `${body} ` }), false);
+  assert.equal(verifyQuickNodeSignature({
+    ...signed,
+    timestamp: String(Date.now() - 10 * 60 * 1000),
+  }), false);
+  assert.equal(verifyQuickNodeSignature({ ...signed, nonce: 'bad' }), false);
+});
+
+test('accepts only well-formed Sepolia transfer payloads', () => {
+  const transferLog = {
+    address: '0x1111111111111111111111111111111111111111',
+    topics: [
+      transferTopic,
+      `0x${'0'.repeat(24)}${'2'.repeat(40)}`,
+      `0x${'0'.repeat(24)}${'3'.repeat(40)}`,
+    ],
+    data: `0x${'0'.repeat(63)}1`,
+    transactionHash: `0x${'4'.repeat(64)}`,
+    blockHash: `0x${'5'.repeat(64)}`,
+    blockNumber: '0x10',
+    logIndex: '0x0',
+  };
+  assert.deepEqual(parseSepoliaPayload({
+    chainId: '0xaa36a7',
+    logs: [transferLog],
+    transactions: [],
+  }).logs, [transferLog]);
+  assert.throws(() => parseSepoliaPayload({
+    chainId: '0x1',
+    logs: [transferLog],
+    transactions: [],
+  }), /Only Ethereum Sepolia/);
+  assert.throws(() => parseSepoliaPayload({
+    chainId: 11155111,
+    logs: [{ ...transferLog, topics: [transferTopic] }],
+    transactions: [],
+  }), /Invalid ERC-20 transfer log/);
+});
+
+test('authenticates QuickNode deliveries and acknowledges event replays once', async t => {
+  const crypto = require('node:crypto');
+  const names = [
+    'SEPOLIA_RPC_URL',
+    'QUICKNODE_STREAMS_SECRET',
+    'SEPOLIA_CONFIRMATIONS',
+    'SEPOLIA_USDC_CONTRACT',
+    'SEPOLIA_USDT_CONTRACT',
+  ];
+  const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  const previousFetch = global.fetch;
+  process.env.SEPOLIA_RPC_URL = 'https://sepolia.example';
+  process.env.QUICKNODE_STREAMS_SECRET = 'test-stream-secret';
+  process.env.SEPOLIA_CONFIRMATIONS = '2';
+  delete process.env.SEPOLIA_USDC_CONTRACT;
+  delete process.env.SEPOLIA_USDT_CONTRACT;
+  const rpcMethods = [];
+  global.fetch = async (_url, options) => {
+    const request = JSON.parse(options.body);
+    rpcMethods.push(request.method);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        jsonrpc: '2.0',
+        id: request.id,
+        result: request.method === 'eth_chainId' ? '0xaa36a7' : '0x100',
+      }),
+    };
+  };
+
+  const server = app.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => {
+    global.fetch = previousFetch;
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+
+  const body = JSON.stringify({ chainId: '0xaa36a7', logs: [], transactions: [] });
+  const nonce = 'unit-test-nonce-123';
+  const timestamp = String(Date.now());
+  const signature = crypto.createHmac('sha256', process.env.QUICKNODE_STREAMS_SECRET)
+    .update(nonce + timestamp + body)
+    .digest('hex');
+  const url = `http://127.0.0.1:${server.address().port}/api/monitor/quicknode`;
+  const request = () => previousFetch(url, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-qn-nonce': nonce,
+      'x-qn-timestamp': timestamp,
+      'x-qn-signature': signature,
+    },
+    body,
+  });
+
+  const accepted = await request();
+  assert.equal(accepted.status, 200);
+  assert.equal((await accepted.json()).transfersEnabled, false);
+  assert.deepEqual(rpcMethods, ['eth_chainId', 'eth_blockNumber']);
+  const duplicate = await request();
+  assert.equal(duplicate.status, 200);
+  assert.deepEqual(await duplicate.json(), { accepted: true, duplicate: true });
+  assert.deepEqual(rpcMethods, ['eth_chainId', 'eth_blockNumber']);
+});
+
+test('credits confirmed Sepolia events to a separate ledger and reverses reorged events', async t => {
+  const crypto = require('node:crypto');
+  const names = [
+    'SEPOLIA_RPC_URL',
+    'QUICKNODE_STREAMS_SECRET',
+    'SEPOLIA_CONFIRMATIONS',
+    'SEPOLIA_USDC_CONTRACT',
+    'SEPOLIA_USDT_CONTRACT',
+    'SEPOLIA_DEPOSITS_ENABLED',
+    'EVM_ACCOUNT_XPUB',
+    'NODE_ENV',
+    'VERCEL',
+  ];
+  const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  const previousFetch = global.fetch;
+  const account = bip32.fromSeed(Buffer.alloc(32, 61)).derivePath("m/44'/60'/0'");
+  process.env.SEPOLIA_RPC_URL = 'https://sepolia.example';
+  process.env.QUICKNODE_STREAMS_SECRET = 'test-stream-secret';
+  process.env.SEPOLIA_CONFIRMATIONS = '2';
+  process.env.EVM_ACCOUNT_XPUB = account.neutered().toBase58();
+  const usdcContract = '0x1111111111111111111111111111111111111111';
+  process.env.SEPOLIA_USDC_CONTRACT = usdcContract;
+  process.env.SEPOLIA_DEPOSITS_ENABLED = 'true';
+  process.env.NODE_ENV = 'test';
+  delete process.env.SEPOLIA_USDT_CONTRACT;
+
+  const transactionHash = `0x${'a'.repeat(64)}`;
+  const usdcTransactionHash = `0x${'c'.repeat(64)}`;
+  const blockHash = `0x${'b'.repeat(64)}`;
+  const blockNumber = '0x10';
+  let deposit;
+  let usdcDeposit;
+  const usdcLog = {
+    address: usdcContract,
+    topics: [
+      transferTopic,
+      `0x${'0'.repeat(24)}${'2'.repeat(40)}`,
+      `0x${'0'.repeat(24)}${'3'.repeat(40)}`,
+    ],
+    data: `0x${'0'.repeat(63)}a`,
+    transactionHash: usdcTransactionHash,
+    blockHash,
+    blockNumber,
+    logIndex: '0x0',
+  };
+  global.fetch = async (_url, options) => {
+    const request = JSON.parse(options.body);
+    const results = {
+      eth_chainId: '0xaa36a7',
+      eth_blockNumber: '0x12',
+      eth_getTransactionReceipt: {
+        transactionHash: request.params[0],
+        status: '0x1',
+        blockHash,
+        blockNumber,
+        logs: request.params[0] === usdcTransactionHash ? [usdcLog] : [],
+      },
+      eth_getTransactionByHash: {
+        hash: transactionHash,
+        to: deposit.address,
+        value: '0xde0b6b3a7640000',
+        blockHash,
+        blockNumber,
+      },
+    };
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ jsonrpc: '2.0', id: request.id, result: results[request.method] }),
+    };
+  };
+
+  const server = app.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => {
+    global.fetch = previousFetch;
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const registration = await previousFetch(`${baseUrl}/api/auth/register`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      origin: baseUrl,
+    },
+    body: JSON.stringify({
+      email: 'monitor-test@example.com',
+      name: 'Monitor Test',
+      password: 'a secure password 123',
+      passwordConfirmation: 'a secure password 123',
+    }),
+  });
+  assert.equal(registration.status, 201);
+  const user = (await registration.json()).user;
+  const cookie = registration.headers.get('set-cookie').split(';')[0];
+  process.env.NODE_ENV = 'production';
+  process.env.VERCEL = '1';
+  const productionSepoliaDeposit = await previousFetch(`${baseUrl}/api/deposits/address`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      origin: baseUrl,
+      cookie,
+    },
+    body: JSON.stringify({
+      asset: 'ETH',
+      network: 'Sepolia',
+      amountUsdCents: 5000,
+    }),
+  });
+  process.env.NODE_ENV = 'test';
+  if (previous.VERCEL === undefined) delete process.env.VERCEL;
+  else process.env.VERCEL = previous.VERCEL;
+  assert.equal(productionSepoliaDeposit.status, 201);
+  assert.equal((await productionSepoliaDeposit.json()).monitoringReady, true);
+  deposit = await createDepositAddress({
+    userId: user.id,
+    asset: 'ETH',
+    network: 'Sepolia',
+  });
+  usdcDeposit = await createDepositAddress({
+    userId: user.id,
+    asset: 'USDC',
+    network: 'Sepolia',
+  });
+  usdcLog.topics[2] =
+    `0x${'0'.repeat(24)}${usdcDeposit.address.slice(2).toLowerCase()}`;
+  const body = JSON.stringify({
+    chainId: '0xaa36a7',
+    logs: [usdcLog],
+    transactions: [{
+      hash: transactionHash,
+      to: deposit.address,
+      value: '0xde0b6b3a7640000',
+      blockHash,
+      blockNumber,
+    }],
+  });
+  const nonce = 'native-deposit-nonce-1';
+  const timestamp = String(Date.now());
+  const signature = crypto.createHmac('sha256', process.env.QUICKNODE_STREAMS_SECRET)
+    .update(nonce + timestamp + body)
+    .digest('hex');
+  const monitored = await previousFetch(`${baseUrl}/api/monitor/quicknode`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-qn-nonce': nonce,
+      'x-qn-timestamp': timestamp,
+      'x-qn-signature': signature,
+    },
+    body,
+  });
+  assert.equal(monitored.status, 200);
+  const response = await monitored.json();
+  assert.deepEqual(response.recorded.map(event => event.asset).sort(), ['ETH', 'USDC']);
+  const nativeEvent = response.recorded.find(event => event.asset === 'ETH');
+  const tokenEvent = response.recorded.find(event => event.asset === 'USDC');
+  assert.equal(nativeEvent.amountBaseUnits, '1000000000000000000');
+  assert.equal(nativeEvent.status, 'confirmed');
+  assert.equal(tokenEvent.amountBaseUnits, '10');
+  assert.equal(tokenEvent.status, 'confirmed');
+  assert.equal(response.transfersEnabled, false);
+
+  const details = await previousFetch(`${baseUrl}/api/deposits/address/${deposit.id}`, {
+    headers: { cookie },
+  });
+  assert.equal(details.status, 200);
+  const detailsBody = await details.json();
+  assert.equal(detailsBody.productionBalanceCredited, false);
+  assert.equal(detailsBody.observedTestnetEvents.length, 1);
+  assert.equal(detailsBody.observedTestnetEvents[0].status, 'confirmed');
+  assert.equal(detailsBody.testnetLedgerEntries[0].status, 'credited');
+  const tokenDetails = await previousFetch(
+    `${baseUrl}/api/deposits/address/${usdcDeposit.id}`,
+    { headers: { cookie } }
+  );
+  assert.equal(tokenDetails.status, 200);
+  const tokenDetailsBody = await tokenDetails.json();
+  assert.equal(tokenDetailsBody.productionBalanceCredited, false);
+  assert.equal(tokenDetailsBody.observedTestnetEvents[0].asset, 'USDC');
+  assert.equal(tokenDetailsBody.testnetLedgerEntries[0].status, 'credited');
+
+  const ledgerResponse = await previousFetch(`${baseUrl}/api/deposits/testnet-ledger`, {
+    headers: { cookie },
+  });
+  assert.equal(ledgerResponse.status, 200);
+  const ledger = await ledgerResponse.json();
+  assert.deepEqual(ledger.balances, [
+    { asset: 'ETH', amountBaseUnits: '1000000000000000000' },
+    { asset: 'USDC', amountBaseUnits: '10' },
+  ]);
+  assert.equal(ledger.productionBalanceCredited, false);
+  assert.equal(ledger.transfersEnabled, false);
+
+  const replayNonce = 'native-deposit-nonce-2';
+  const replayTimestamp = String(Date.now());
+  const replaySignature = crypto.createHmac('sha256', process.env.QUICKNODE_STREAMS_SECRET)
+    .update(replayNonce + replayTimestamp + body)
+    .digest('hex');
+  const replayedEvent = await previousFetch(`${baseUrl}/api/monitor/quicknode`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-qn-nonce': replayNonce,
+      'x-qn-timestamp': replayTimestamp,
+      'x-qn-signature': replaySignature,
+    },
+    body,
+  });
+  assert.equal(replayedEvent.status, 200);
+  assert.equal((await replayedEvent.json()).recorded.length, 2);
+  const unchangedLedger = await previousFetch(`${baseUrl}/api/deposits/testnet-ledger`, {
+    headers: { cookie },
+  });
+  assert.deepEqual((await unchangedLedger.json()).balances, ledger.balances);
+
+  const removedLog = { ...usdcLog, removed: true };
+  const reorgBody = JSON.stringify({
+    chainId: '0xaa36a7',
+    logs: [removedLog],
+    transactions: [],
+  });
+  const reorgNonce = 'native-deposit-nonce-3';
+  const reorgTimestamp = String(Date.now());
+  const reorgSignature = crypto.createHmac('sha256', process.env.QUICKNODE_STREAMS_SECRET)
+    .update(reorgNonce + reorgTimestamp + reorgBody)
+    .digest('hex');
+  const reorged = await previousFetch(`${baseUrl}/api/monitor/quicknode`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-qn-nonce': reorgNonce,
+      'x-qn-timestamp': reorgTimestamp,
+      'x-qn-signature': reorgSignature,
+    },
+    body: reorgBody,
+  });
+  assert.equal(reorged.status, 200);
+  const afterReorg = await previousFetch(`${baseUrl}/api/deposits/testnet-ledger`, {
+    headers: { cookie },
+  });
+  assert.deepEqual((await afterReorg.json()).balances, [
+    { asset: 'ETH', amountBaseUnits: '1000000000000000000' },
+  ]);
 });
 
 test('hashes account passwords with a per-password salt and verifies them safely', async () => {
@@ -347,9 +779,20 @@ test('registers accounts and allocates distinct, user-scoped deposit addresses',
       amountUsdCents: 5000,
     }),
   });
+  const sepoliaDisabled = await request('/api/deposits/address', {
+    method: 'POST',
+    cookie,
+    body: JSON.stringify({
+      asset: 'ETH',
+      network: 'Sepolia',
+      amountUsdCents: 5000,
+    }),
+  });
   process.env.NODE_ENV = 'test';
   assert.equal(productionDisabled.status, 503);
   assert.match((await productionDisabled.json()).error, /disabled in production/);
+  assert.equal(sepoliaDisabled.status, 503);
+  assert.match((await sepoliaDisabled.json()).error, /SEPOLIA_DEPOSITS_ENABLED=true/);
 
   const createAddress = async (asset, network, amountUsdCents) => {
     const response = await request('/api/deposits/address', {

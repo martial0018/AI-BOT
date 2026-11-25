@@ -651,6 +651,13 @@
             </div>
           </div>
           <p id="deposit-warning" class="text-xs text-amber-300 mt-3">Automatic on-chain monitoring is not configured. Do not send funds yet; deposits will not be detected or credited automatically.</p>
+          <div class="mt-3 border-t border-gray-700 pt-3">
+            <p class="text-xs font-medium text-indigo-200">Sepolia testnet ledger</p>
+            <p id="testnet-ledger-summary" class="mt-1 text-xs text-gray-400" role="status" aria-live="polite">
+              No confirmed testnet deposits.
+            </p>
+            <ul id="testnet-deposit-events" class="mt-2 space-y-1 text-xs text-gray-400" aria-live="polite"></ul>
+          </div>
           <p id="deposit-error" class="hidden text-sm text-red-300 mt-3" role="alert"></p>
         </div>
         <button id="generate-deposit" data-action="generate-deposit-address" class="hidden w-full bg-indigo-600 hover:bg-indigo-500 py-3 rounded-xl font-medium transition disabled:cursor-not-allowed disabled:opacity-50" disabled>
@@ -1040,7 +1047,52 @@
     let depositAddressReady = false;
     let creatingDepositAddress = false;
     let availableDepositOptions = [];
+    let depositStatusTimer;
+    let depositStatusPolls = 0;
+    let currentDepositId;
+
+    function renderTestnetLedger(ledger) {
+      const summary = document.getElementById('testnet-ledger-summary');
+      const balances = Array.isArray(ledger?.balances) ? ledger.balances : [];
+      summary.textContent = balances.length
+        ? balances.map(balance => `${balance.asset}: ${balance.amountBaseUnits} base units`).join(' · ')
+        : 'No confirmed testnet deposits.';
+    }
+
+    async function refreshTestnetLedger() {
+      try {
+        const response = await fetch('/api/deposits/testnet-ledger', { cache: 'no-store' });
+        if (!response.ok) return;
+        renderTestnetLedger(await response.json());
+      } catch (err) {
+        console.error('Could not refresh the Sepolia testnet ledger', err);
+      }
+    }
+
+    async function refreshTestnetDepositStatus(depositId) {
+      const response = await fetch(`/api/deposits/address/${encodeURIComponent(depositId)}`, {
+        cache: 'no-store',
+      });
+      if (!response.ok) throw new Error(`Could not refresh deposit status (${response.status}).`);
+      const details = await response.json();
+      const list = document.getElementById('testnet-deposit-events');
+      const events = Array.isArray(details.observedTestnetEvents)
+        ? details.observedTestnetEvents
+        : [];
+      list.replaceChildren(...events.map(event => {
+        const item = document.createElement('li');
+        item.textContent = `${event.asset}: ${event.amountBaseUnits} base units · ${event.status} · ${event.confirmations} confirmations`;
+        return item;
+      }));
+      await refreshTestnetLedger();
+      return events;
+    }
+
     function clearDepositAddress() {
+      clearInterval(depositStatusTimer);
+      depositStatusTimer = undefined;
+      depositStatusPolls = 0;
+      currentDepositId = undefined;
       document.getElementById('deposit-qr').classList.add('hidden');
       document.getElementById('deposit-qr').removeAttribute('src');
       const address = document.getElementById('deposit-address');
@@ -1048,6 +1100,7 @@
       address.textContent = '';
       document.getElementById('copy-deposit-address').classList.add('hidden');
       document.getElementById('deposit-status').textContent = '';
+      document.getElementById('testnet-deposit-events').replaceChildren();
       document.getElementById('deposit-error').classList.add('hidden');
       updateDepositButton();
     }
@@ -1099,10 +1152,12 @@
         depositAddressReady = result.addressGenerationReady === true;
         availableDepositOptions = result.depositOptions || [];
         renderSupportedPaymentOptions(availableDepositOptions);
-        if (!depositAddressReady) {
-          help.textContent = 'Configure BTC_ACCOUNT_XPUB, EVM_ACCOUNT_XPUB, and TRON_ACCOUNT_XPUB with public extended keys, then restart the server.';
+        if (result.testnetDepositIssuanceEnabled) {
+          help.textContent = 'Sepolia testnet deposits only are enabled. Confirmed events appear in the separate testnet ledger; production deposits and transfers are disabled.';
+        } else if (!depositAddressReady) {
+          help.textContent = 'No deposit network is enabled. Sepolia requires its RPC, webhook secret, confirmation count, public EVM key or Turnkey setup, and SEPOLIA_DEPOSITS_ENABLED=true.';
         } else {
-          help.textContent = 'Unique addresses are derived from public keys. Private keys never leave your wallet.';
+          help.textContent = 'Only locally enabled address options are shown. Production deposits and transfers remain disabled.';
         }
         updateDepositButton();
       } catch (err) {
@@ -1204,6 +1259,37 @@
         document.getElementById('copy-deposit-address').classList.remove('hidden');
         document.getElementById('deposit-status').textContent =
           `Unique ${result.asset} address on ${result.network} generated. USD reference: ${formatDepositAmountUsd(result.amountUsdCents)} (not a quote or minimum).`;
+        document.getElementById('deposit-warning').textContent = result.warning;
+        currentDepositId = result.id;
+        if (result.monitoringReady) {
+          const poll = async () => {
+            if (currentDepositId !== result.id) return;
+            try {
+              const events = await refreshTestnetDepositStatus(result.id);
+              if (events.some(event => event.status === 'reorged')) {
+                document.getElementById('deposit-status').textContent =
+                  'A previously observed Sepolia event was reorganized; its testnet ledger credit is reversed.';
+              } else if (events.some(event => event.status === 'confirmed')) {
+                document.getElementById('deposit-status').textContent =
+                  'A Sepolia testnet deposit is confirmed and recorded in the testnet ledger. This is not a production balance.';
+              } else if (events.some(event => event.status === 'confirming')) {
+                document.getElementById('deposit-status').textContent =
+                  'Sepolia testnet deposit detected; waiting for the configured confirmations.';
+              }
+            } catch (err) {
+              console.error('Could not refresh Sepolia deposit status', err);
+            }
+            depositStatusPolls += 1;
+            if (depositStatusPolls >= 40) {
+              clearInterval(depositStatusTimer);
+              depositStatusTimer = undefined;
+            }
+          };
+          await poll();
+          if (currentDepositId === result.id && depositStatusPolls < 40) {
+            depositStatusTimer = setInterval(poll, 15000);
+          }
+        }
       } catch (err) {
         console.error('Could not create deposit address', err);
         error.textContent = err instanceof TypeError
@@ -1331,6 +1417,7 @@
     clearDepositAddress();
     setDepositStep('amount');
     loadDepositAddressConfiguration();
+    refreshTestnetLedger();
     renderChart('1M');
     render();
     setInterval(render, 60000);

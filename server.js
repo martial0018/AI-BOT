@@ -10,6 +10,13 @@ const QRCode = require('qrcode');
 const { getSweepReadiness } = require('./sweeps');
 const { deriveSecpAddress } = require('./wallet');
 const { deriveTurnkeyEvmAddress, getTurnkeyConfiguration } = require('./turnkey');
+const {
+  getMonitorConfiguration,
+  parseSepoliaPayload,
+  rpcRequest,
+  sepoliaChainId,
+  verifyQuickNodeSignature,
+} = require('./deposit-monitor');
 
 const scrypt = promisify(crypto.scrypt);
 const passwordHashN = 32768;
@@ -73,6 +80,34 @@ const postgresSchema = `
     created_at TEXT NOT NULL,
     UNIQUE (derivation_family, derivation_index),
     UNIQUE (network, address)
+  );
+  CREATE TABLE IF NOT EXISTS quicknode_webhook_nonces (
+    nonce TEXT PRIMARY KEY,
+    received_at BIGINT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS monitored_deposit_events (
+    event_id TEXT PRIMARY KEY,
+    deposit_id TEXT NOT NULL REFERENCES wallet_deposits(id),
+    transaction_hash TEXT NOT NULL,
+    event_index INTEGER NOT NULL,
+    asset TEXT NOT NULL,
+    amount_base_units TEXT NOT NULL,
+    block_number BIGINT NOT NULL,
+    block_hash TEXT NOT NULL,
+    confirmations INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('confirming', 'confirmed', 'reorged')),
+    updated_at TEXT NOT NULL,
+    UNIQUE (transaction_hash, event_index)
+  );
+  CREATE TABLE IF NOT EXISTS testnet_ledger_entries (
+    event_id TEXT PRIMARY KEY REFERENCES monitored_deposit_events(event_id),
+    deposit_id TEXT NOT NULL REFERENCES wallet_deposits(id),
+    user_id TEXT NOT NULL REFERENCES users(id),
+    asset TEXT NOT NULL,
+    amount_base_units TEXT NOT NULL,
+    block_hash TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('credited', 'reversed')),
+    updated_at TEXT NOT NULL
   )
 `;
 
@@ -138,6 +173,34 @@ if (databaseUrl) {
     UNIQUE (derivation_family, derivation_index),
     UNIQUE (network, address)
   );
+  CREATE TABLE IF NOT EXISTS quicknode_webhook_nonces (
+    nonce TEXT PRIMARY KEY,
+    received_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS monitored_deposit_events (
+    event_id TEXT PRIMARY KEY,
+    deposit_id TEXT NOT NULL REFERENCES wallet_deposits(id),
+    transaction_hash TEXT NOT NULL,
+    event_index INTEGER NOT NULL,
+    asset TEXT NOT NULL,
+    amount_base_units TEXT NOT NULL,
+    block_number INTEGER NOT NULL,
+    block_hash TEXT NOT NULL,
+    confirmations INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('confirming', 'confirmed', 'reorged')),
+    updated_at TEXT NOT NULL,
+    UNIQUE (transaction_hash, event_index)
+  );
+  CREATE TABLE IF NOT EXISTS testnet_ledger_entries (
+    event_id TEXT PRIMARY KEY REFERENCES monitored_deposit_events(event_id),
+    deposit_id TEXT NOT NULL REFERENCES wallet_deposits(id),
+    user_id TEXT NOT NULL REFERENCES users(id),
+    asset TEXT NOT NULL,
+    amount_base_units TEXT NOT NULL,
+    block_hash TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('credited', 'reversed')),
+    updated_at TEXT NOT NULL
+  );
   `);
   sqliteDatabase.pragma('foreign_keys = ON');
   sqliteDatabase.exec(`
@@ -175,6 +238,15 @@ async function databaseGet(statement, parameters = []) {
   return sqliteDatabase.prepare(statement).get(...parameters);
 }
 
+async function databaseAll(statement, parameters = []) {
+  await ensureDatabaseReady();
+  if (postgresPool) {
+    const result = await postgresPool.query(postgresPlaceholders(statement), parameters);
+    return result.rows;
+  }
+  return sqliteDatabase.prepare(statement).all(...parameters);
+}
+
 async function databaseRun(statement, parameters = []) {
   await ensureDatabaseReady();
   if (postgresPool) return postgresPool.query(postgresPlaceholders(statement), parameters);
@@ -197,11 +269,14 @@ if (!depositColumns.has('settlement_chain')) {
 const depositOptionCodes = {
   'BTC:Bitcoin': 'bitcoin',
   'ETH:Ethereum': 'ethereum',
+  'ETH:Sepolia': 'ethereum',
   'ETH:Arbitrum': 'arbitrum',
   'USDC:Ethereum': 'ethereum',
+  'USDC:Sepolia': 'ethereum',
   'USDC:Arbitrum': 'arbitrum',
   'USDC:BNB Chain': 'bsc',
   'USDT:Ethereum': 'ethereum',
+  'USDT:Sepolia': 'ethereum',
   'USDT:Arbitrum': 'arbitrum',
   'USDT:BNB Chain': 'bsc',
   'USDT:Tron': 'tron',
@@ -216,21 +291,42 @@ const depositDerivationFamilies = {
 
 function getDepositOptions(env = process.env) {
   const turnkeyConfigured = getTurnkeyConfiguration(env).configured;
-  const issuanceAllowed = isDepositAddressIssuanceAllowed(env);
-  return getShieldzSupportedPaymentGroups().map(group => ({
+  const monitorConfigured = getMonitorConfiguration(env).configured;
+  const groups = [
+    ...getShieldzSupportedPaymentGroups(),
+    {
+      name: 'Sepolia testnet only',
+      options: [
+        { asset: 'ETH', network: 'Sepolia', label: 'ETH · Sepolia testnet' },
+        { asset: 'USDC', network: 'Sepolia', label: 'USDC · Sepolia testnet' },
+        { asset: 'USDT', network: 'Sepolia', label: 'USDT · Sepolia testnet' },
+      ],
+    },
+  ];
+  return groups.map(group => ({
     ...group,
     options: group.options.map(option => ({
       ...option,
       networkCode: depositOptionCodes[`${option.asset}:${option.network}`],
-      addressReady: issuanceAllowed && isDepositAddressReady(
-        depositOptionCodes[`${option.asset}:${option.network}`], env, turnkeyConfigured
-      ),
+      addressReady: isDepositAddressIssuanceAllowed(env, option.network)
+        && isDepositAddressReady(
+          depositOptionCodes[`${option.asset}:${option.network}`], env, turnkeyConfigured
+        )
+        && (option.network !== 'Sepolia'
+          || (monitorConfigured
+            && env.SEPOLIA_DEPOSITS_ENABLED === 'true'
+            && (option.asset === 'ETH' || Boolean(env[`SEPOLIA_${option.asset}_CONTRACT`])))),
     })),
   }));
 }
 
-function isDepositAddressIssuanceAllowed(env = process.env) {
-  return env.VERCEL !== '1' && env.NODE_ENV !== 'production';
+function isDepositAddressIssuanceAllowed(env = process.env, network) {
+  if (network === 'Sepolia') {
+    return env.SEPOLIA_DEPOSITS_ENABLED === 'true'
+      && getMonitorConfiguration(env).configured;
+  }
+  if (env.VERCEL !== '1' && env.NODE_ENV !== 'production') return true;
+  return false;
 }
 
 function isDepositAddressReady(networkCode, env, turnkeyConfigured) {
@@ -416,6 +512,292 @@ async function createDepositAddress({ userId, asset, network, env = process.env 
   return { id, asset, network, address, status: 'awaiting_payment', createdAt };
 }
 
+async function findSepoliaDeposit(address) {
+  if (!isEthereumAddress(address)) return undefined;
+  return databaseGet(`
+    SELECT id, asset, network, address
+    FROM wallet_deposits
+    WHERE network = 'Sepolia' AND LOWER(address) = LOWER(?)
+  `, [address]);
+}
+
+function isEthereumAddress(address) {
+  return typeof address === 'string' && /^0x[0-9a-f]{40}$/i.test(address);
+}
+
+function matchingReceiptLog(receipt, event) {
+  return Array.isArray(receipt?.logs) && receipt.logs.some(log =>
+    typeof log.logIndex === 'string'
+    && Number.parseInt(log.logIndex, 16) === Number.parseInt(event.logIndex, 16)
+    && log.address?.toLowerCase() === event.address.toLowerCase()
+    && log.transactionHash?.toLowerCase() === event.transactionHash.toLowerCase()
+    && log.blockHash?.toLowerCase() === event.blockHash.toLowerCase()
+    && JSON.stringify(log.topics?.map(topic => topic.toLowerCase()))
+      === JSON.stringify(event.topics.map(topic => topic.toLowerCase()))
+    && log.data?.toLowerCase() === event.data.toLowerCase()
+    && log.removed !== true
+  );
+}
+
+async function verifySepoliaEvent(event, type, configuration, rpcUrl, latestBlock) {
+  const transactionHash = type === 'log' ? event.transactionHash : event.hash;
+  const receipt = await rpcRequest(rpcUrl, 'eth_getTransactionReceipt', [transactionHash]);
+  const blockNumber = Number.parseInt(event.blockNumber, 16);
+  const blockHash = event.blockHash.toLowerCase();
+  if (!receipt || receipt.status !== '0x1'
+    || receipt.transactionHash?.toLowerCase() !== transactionHash.toLowerCase()
+    || receipt.blockHash?.toLowerCase() !== blockHash
+    || receipt.blockNumber !== event.blockNumber) {
+    return { status: 'reorged' };
+  }
+
+  let deposit;
+  let asset;
+  let amountBaseUnits;
+  let eventIndex;
+  if (type === 'log') {
+    const token = Object.entries(configuration.tokens).find(
+      ([, contract]) => contract.toLowerCase() === event.address.toLowerCase()
+    );
+    if (!token || !matchingReceiptLog(receipt, event)) return null;
+    const recipient = `0x${event.topics[2].slice(-40)}`;
+    deposit = await findSepoliaDeposit(recipient);
+    asset = token[0];
+    amountBaseUnits = BigInt(event.data).toString();
+    if (amountBaseUnits === '0') return null;
+    eventIndex = Number.parseInt(event.logIndex, 16);
+  } else {
+    const transaction = await rpcRequest(rpcUrl, 'eth_getTransactionByHash', [event.hash]);
+    if (!transaction || transaction.hash?.toLowerCase() !== event.hash.toLowerCase()
+      || transaction.to?.toLowerCase() !== event.to.toLowerCase()
+      || transaction.value !== event.value
+      || transaction.blockHash?.toLowerCase() !== blockHash
+      || transaction.blockNumber !== event.blockNumber
+      || BigInt(event.value) <= 0n) {
+      return null;
+    }
+    deposit = await findSepoliaDeposit(event.to);
+    asset = 'ETH';
+    amountBaseUnits = BigInt(event.value).toString();
+    eventIndex = -1;
+  }
+
+  if (!deposit || !['ETH', 'USDC', 'USDT'].includes(deposit.asset)
+    || (asset !== 'ETH' && deposit.asset !== asset)) return null;
+
+  const confirmations = Math.max(0, latestBlock - blockNumber + 1);
+  const status = confirmations >= configuration.confirmations ? 'confirmed' : 'confirming';
+  return {
+    eventId: `${transactionHash.toLowerCase()}:${eventIndex}`,
+    depositId: deposit.id,
+    transactionHash: transactionHash.toLowerCase(),
+    eventIndex,
+    asset,
+    amountBaseUnits,
+    blockNumber,
+    blockHash,
+    confirmations,
+    status,
+  };
+}
+
+async function storeSepoliaEvent(event) {
+  await databaseRun(`
+    INSERT INTO monitored_deposit_events (
+      event_id, deposit_id, transaction_hash, event_index, asset,
+      amount_base_units, block_number, block_hash, confirmations, status, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (transaction_hash, event_index) DO UPDATE SET
+      deposit_id = excluded.deposit_id,
+      asset = excluded.asset,
+      amount_base_units = excluded.amount_base_units,
+      block_number = excluded.block_number,
+      block_hash = excluded.block_hash,
+      confirmations = excluded.confirmations,
+      status = excluded.status,
+      updated_at = excluded.updated_at
+  `, [
+    event.eventId,
+    event.depositId,
+    event.transactionHash,
+    event.eventIndex,
+    event.asset,
+    event.amountBaseUnits,
+    event.blockNumber,
+    event.blockHash,
+    event.confirmations,
+    event.status,
+    new Date().toISOString(),
+  ]);
+  await syncTestnetLedgerEntry(event.eventId);
+}
+
+async function syncTestnetLedgerEntry(eventId) {
+  const now = new Date().toISOString();
+  await databaseRun(`
+    INSERT INTO testnet_ledger_entries (
+      event_id, deposit_id, user_id, asset, amount_base_units,
+      block_hash, status, updated_at
+    )
+    SELECT event.event_id, event.deposit_id, deposit.user_id, event.asset,
+      event.amount_base_units, event.block_hash, 'credited', ?
+    FROM monitored_deposit_events AS event
+    JOIN wallet_deposits AS deposit ON deposit.id = event.deposit_id
+    WHERE event.event_id = ? AND event.status = 'confirmed'
+    ON CONFLICT (event_id) DO UPDATE SET
+      deposit_id = excluded.deposit_id,
+      user_id = excluded.user_id,
+      asset = excluded.asset,
+      amount_base_units = excluded.amount_base_units,
+      block_hash = excluded.block_hash,
+      status = 'credited',
+      updated_at = excluded.updated_at
+  `, [now, eventId]);
+  await databaseRun(`
+    UPDATE testnet_ledger_entries
+    SET status = 'reversed', updated_at = ?
+    WHERE event_id = ? AND status = 'credited'
+      AND EXISTS (
+        SELECT 1 FROM monitored_deposit_events
+        WHERE event_id = ? AND status != 'confirmed'
+      )
+  `, [now, eventId, eventId]);
+}
+
+async function markSepoliaEventReorged(event, type, configuration) {
+  let recipient;
+  let asset;
+  let transactionHash;
+  let eventIndex;
+  let amountBaseUnits;
+  let blockNumber;
+  let blockHash;
+  if (type === 'log') {
+    const token = Object.entries(configuration.tokens).find(
+      ([, address]) => address.toLowerCase() === event.address.toLowerCase()
+    );
+    if (!token) return false;
+    recipient = `0x${event.topics[2].slice(-40)}`;
+    asset = token[0];
+    transactionHash = event.transactionHash.toLowerCase();
+    eventIndex = Number.parseInt(event.logIndex, 16);
+    amountBaseUnits = BigInt(event.data).toString();
+  } else {
+    recipient = event.to;
+    asset = 'ETH';
+    transactionHash = event.hash.toLowerCase();
+    eventIndex = -1;
+    amountBaseUnits = BigInt(event.value).toString();
+  }
+  const deposit = await findSepoliaDeposit(recipient);
+  if (!deposit || deposit.asset !== asset) return false;
+  blockNumber = Number.parseInt(event.blockNumber, 16);
+  blockHash = event.blockHash.toLowerCase();
+  await storeSepoliaEvent({
+    eventId: `${transactionHash}:${eventIndex}`,
+    depositId: deposit.id,
+    transactionHash,
+    eventIndex,
+    asset,
+    amountBaseUnits,
+    blockNumber,
+    blockHash,
+    confirmations: 0,
+    status: 'reorged',
+  });
+  return true;
+}
+
+async function reconcileSepoliaEvents(latestBlock, configuration, rpcUrl) {
+  const rows = await databaseAll(`
+    SELECT event_id AS "eventId", transaction_hash AS "transactionHash",
+      block_number AS "blockNumber", block_hash AS "blockHash", confirmations, status
+    FROM monitored_deposit_events
+    WHERE status = 'confirming' OR (status = 'confirmed' AND block_number >= ?)
+    ORDER BY block_number DESC
+    LIMIT 500
+  `, [Math.max(0, latestBlock - 128)]);
+  let confirmed = 0;
+  let reorged = 0;
+  for (const event of rows) {
+    const receipt = await rpcRequest(
+      rpcUrl, 'eth_getTransactionReceipt', [event.transactionHash]
+    );
+    const canonical = receipt?.status === '0x1'
+      && receipt.transactionHash?.toLowerCase() === event.transactionHash.toLowerCase()
+      && receipt.blockHash?.toLowerCase() === event.blockHash.toLowerCase()
+      && Number.parseInt(receipt.blockNumber, 16) === Number(event.blockNumber);
+    const confirmations = canonical
+      ? Math.max(0, latestBlock - Number(event.blockNumber) + 1)
+      : 0;
+    const status = canonical
+      ? confirmations >= configuration.confirmations ? 'confirmed' : 'confirming'
+      : 'reorged';
+    await databaseRun(`
+      UPDATE monitored_deposit_events
+      SET confirmations = ?, status = ?, updated_at = ?
+      WHERE event_id = ?
+    `, [confirmations, status, new Date().toISOString(), event.eventId]);
+    await syncTestnetLedgerEntry(event.eventId);
+    if (status === 'confirmed') confirmed += 1;
+    if (status === 'reorged') reorged += 1;
+  }
+  return { reconciled: rows.length, confirmed, reorged };
+}
+
+async function processSepoliaPayload(payload, env = process.env) {
+  const configuration = getMonitorConfiguration(env);
+  if (!configuration.configured) {
+    throw new Error(`Configure ${configuration.missing[0]} before monitoring Sepolia deposits.`);
+  }
+  const { logs, transactions } = parseSepoliaPayload(payload);
+  const rpcUrl = env.SEPOLIA_RPC_URL.trim();
+  const chainId = await rpcRequest(rpcUrl, 'eth_chainId', []);
+  if (typeof chainId !== 'string'
+    || chainId.toLowerCase() !== `0x${sepoliaChainId.toString(16)}`) {
+    throw new Error('Configured RPC endpoint is not connected to Ethereum Sepolia.');
+  }
+  const head = await rpcRequest(rpcUrl, 'eth_blockNumber', []);
+  if (typeof head !== 'string' || !/^0x[0-9a-f]+$/i.test(head)) {
+    throw new Error('Sepolia RPC returned an invalid latest block.');
+  }
+  const latestBlock = Number.parseInt(head, 16);
+  const recorded = [];
+  let reorged = 0;
+  for (const [type, events] of [['log', logs], ['transaction', transactions]]) {
+    for (const event of events) {
+      if (event.removed === true) {
+        reorged += Number(await markSepoliaEventReorged(event, type, configuration));
+        continue;
+      }
+      const verified = await verifySepoliaEvent(
+        event, type, configuration, rpcUrl, latestBlock
+      );
+      if (!verified || verified.status === 'reorged') continue;
+      await storeSepoliaEvent(verified);
+      recorded.push({
+        asset: verified.asset,
+        amountBaseUnits: verified.amountBaseUnits,
+        confirmations: verified.confirmations,
+        status: verified.status,
+      });
+    }
+  }
+  const reconciliation = await reconcileSepoliaEvents(latestBlock, configuration, rpcUrl);
+  return {
+    recorded,
+    reorged,
+    reconciliation,
+    dryRunSweeps: recorded.map(event => ({
+      asset: event.asset,
+      amountBaseUnits: event.amountBaseUnits,
+      status: event.status === 'confirmed' ? 'eligible-for-manual-review' : 'waiting-confirmations',
+      transfersEnabled: false,
+    })),
+    transfersEnabled: false,
+  };
+}
+
 app.disable('x-powered-by');
 app.use(helmet({
   contentSecurityPolicy: {
@@ -434,12 +816,12 @@ app.use(helmet({
   },
   crossOriginEmbedderPolicy: false,
 }));
-app.use(express.json({ limit: '4kb', type: 'application/json' }));
 app.use('/api/', rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 30,
   standardHeaders: 'draft-8',
   legacyHeaders: false,
+  skip: req => req.path === '/monitor/quicknode',
 }));
 app.use(async (req, _res, next) => {
   try {
@@ -463,6 +845,82 @@ app.use(async (req, _res, next) => {
     next();
   }
 });
+
+app.post(
+  '/api/monitor/quicknode',
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 600,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+  }),
+  express.raw({ type: 'application/json', limit: '1mb' }),
+  async (req, res) => {
+    const configuration = getMonitorConfiguration();
+    if (!configuration.configured) {
+      return res.status(503).json({
+        error: 'Sepolia monitoring is not configured.',
+        missing: configuration.missing,
+      });
+    }
+
+    if (!Buffer.isBuffer(req.body)) {
+      return res.status(400).json({ error: 'Expected an application/json payload.' });
+    }
+    const body = req.body.toString('utf8');
+    const nonce = req.get('x-qn-nonce');
+    const timestamp = req.get('x-qn-timestamp');
+    if (!verifyQuickNodeSignature({
+      secret: process.env.QUICKNODE_STREAMS_SECRET,
+      body,
+      nonce,
+      timestamp,
+      signature: req.get('x-qn-signature'),
+    })) {
+      return res.status(401).json({ error: 'Invalid QuickNode signature.' });
+    }
+
+    let payload;
+    try {
+      payload = JSON.parse(body);
+    } catch {
+      return res.status(400).json({ error: 'Invalid JSON payload.' });
+    }
+
+    await databaseRun(
+      'DELETE FROM quicknode_webhook_nonces WHERE received_at < ?',
+      [Date.now() - 24 * 60 * 60 * 1000]
+    );
+    try {
+      await databaseRun(
+        'INSERT INTO quicknode_webhook_nonces (nonce, received_at) VALUES (?, ?)',
+        [nonce, Date.now()]
+      );
+    } catch (error) {
+      if (error.code === '23505' || error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY'
+        || error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+        return res.status(200).json({ accepted: true, duplicate: true });
+      }
+      throw error;
+    }
+
+    try {
+      const result = await processSepoliaPayload(payload);
+      return res.status(200).json({
+        accepted: true,
+        network: 'ethereum-sepolia',
+        ...result,
+        warning: 'Testnet observations only. No account balances are credited and no transactions are sent.',
+      });
+    } catch (error) {
+      await databaseRun('DELETE FROM quicknode_webhook_nonces WHERE nonce = ?', [nonce]);
+      console.error('Sepolia webhook processing failed:', error.name || 'Error');
+      return res.status(503).json({ error: 'Sepolia event verification failed; QuickNode may retry.' });
+    }
+  }
+);
+
+app.use(express.json({ limit: '4kb', type: 'application/json' }));
 
 app.post('/api/auth/register', requireSameOrigin, requirePersistentDatabase, async (req, res) => {
   const { email, name, password, passwordConfirmation } = req.body || {};
@@ -754,10 +1212,11 @@ app.get('/api/health', async (_req, res) => {
   await databaseReady;
   const configured = isDatabaseConfigured();
   const ready = configured && !databaseInitError;
+  const monitorReady = getMonitorConfiguration().configured;
   res.status(ready ? 200 : 503).json({
     status: ready ? 'ok' : 'degraded',
     mode: 'self-custody-addresses',
-    monitoring: 'disabled',
+    monitoring: monitorReady ? 'sepolia-configured-not-verified' : 'disabled',
     persistentStorage: ready ? 'configured' : configured ? 'unavailable' : 'unconfigured',
     databaseErrorCode: databaseInitError?.code,
     databaseErrorType: databaseInitError?.name,
@@ -776,10 +1235,31 @@ app.get('/api/sweeps/readiness', (_req, res) => {
   });
 });
 
+app.get('/api/monitor/readiness', (_req, res) => {
+  const configuration = getMonitorConfiguration();
+  const depositsEnabled = configuration.configured
+    && process.env.SEPOLIA_DEPOSITS_ENABLED === 'true';
+  const missing = [...configuration.missing];
+  if (configuration.configured && !depositsEnabled) {
+    missing.push('SEPOLIA_DEPOSITS_ENABLED');
+  }
+  res.json({
+    network: 'ethereum-sepolia',
+    configured: configuration.configured,
+    depositsEnabled,
+    mode: depositsEnabled ? 'configured-not-verified' : 'disabled',
+    missing,
+    transfersEnabled: false,
+    testnetLedgerEnabled: true,
+    productionBalanceCreditEnabled: false,
+  });
+});
+
 app.get('/api/deposits/options', requireUser, (_req, res) => {
   res.json({
     apiConfigured: isShieldzApiConfigured(),
     supportedPaymentGroups: getShieldzSupportedPaymentGroups(),
+    testnetDepositIssuanceEnabled: isDepositAddressIssuanceAllowed(process.env, 'Sepolia'),
     addressGenerationReady: getDepositOptions().some(group =>
       group.options.some(option => option.addressReady)),
     depositOptions: getDepositOptions(),
@@ -787,15 +1267,17 @@ app.get('/api/deposits/options', requireUser, (_req, res) => {
 });
 
 app.post('/api/deposits/address', requireSameOrigin, requireUser, async (req, res) => {
-  if (!isDepositAddressIssuanceAllowed()) {
-    return res.status(503).json({
-      error: 'Deposit addresses are disabled in production until monitoring and crediting are verified.',
-    });
-  }
   const { asset, network, amountUsdCents } = req.body || {};
   if (typeof asset !== 'string' || typeof network !== 'string'
     || !depositOptionCodes[`${asset}:${network}`]) {
     return res.status(400).json({ error: 'Choose a supported asset and network.' });
+  }
+  if (!isDepositAddressIssuanceAllowed(process.env, network)) {
+    return res.status(503).json({
+      error: network === 'Sepolia'
+        ? 'Sepolia testnet deposits require complete monitor configuration and SEPOLIA_DEPOSITS_ENABLED=true.'
+        : 'Mainnet deposit addresses are disabled in production until monitoring and crediting are verified.',
+    });
   }
   if (!Number.isSafeInteger(amountUsdCents) || amountUsdCents <= 0) {
     return res.status(400).json({ error: 'Enter a valid USD reference amount.' });
@@ -816,8 +1298,12 @@ app.post('/api/deposits/address', requireSameOrigin, requireUser, async (req, re
       ...deposit,
       amountUsdCents,
       qrCode,
-      monitoringReady: false,
-      warning: 'On-chain monitoring is not configured. This address is not monitored or credited automatically.',
+      monitoringReady: network === 'Sepolia'
+        && getMonitorConfiguration().configured
+        && process.env.SEPOLIA_DEPOSITS_ENABLED === 'true',
+      warning: network === 'Sepolia'
+        ? 'Sepolia testnet only. Confirmed testnet events appear in the separate testnet ledger; no production account balance is credited and no transfers are sent.'
+        : 'Mainnet deposits remain disabled until production monitoring and accounting are verified.',
     });
   } catch (error) {
     const networkCode = depositOptionCodes[`${asset}:${network}`];
@@ -841,7 +1327,57 @@ app.get('/api/deposits/address/:id', requireUser, async (req, res) => {
     FROM wallet_deposits WHERE id = ? AND user_id = ?
   `, [req.params.id, req.user.id]);
   if (!deposit) return res.status(404).json({ error: 'Deposit address not found.' });
-  return res.json({ ...deposit, monitoringReady: false });
+  const events = await databaseAll(`
+    SELECT event_id AS "eventId", asset, amount_base_units AS "amountBaseUnits",
+      block_number AS "blockNumber", confirmations, status, updated_at AS "updatedAt"
+    FROM monitored_deposit_events WHERE deposit_id = ? ORDER BY block_number DESC
+  `, [deposit.id]);
+  const ledgerEntries = await databaseAll(`
+    SELECT event_id AS "eventId", asset, amount_base_units AS "amountBaseUnits",
+      block_hash AS "blockHash", status, updated_at AS "updatedAt"
+    FROM testnet_ledger_entries
+    WHERE deposit_id = ?
+    ORDER BY updated_at DESC
+  `, [deposit.id]);
+  return res.json({
+    ...deposit,
+    monitoringReady: isDepositAddressIssuanceAllowed(process.env, 'Sepolia'),
+    observedTestnetEvents: events,
+    testnetLedgerEntries: ledgerEntries,
+    productionBalanceCredited: false,
+  });
+});
+
+app.get('/api/deposits/testnet-ledger', requireUser, async (req, res) => {
+  const creditedEntries = await databaseAll(`
+    SELECT asset, amount_base_units AS "amountBaseUnits"
+    FROM testnet_ledger_entries
+    WHERE user_id = ? AND status = 'credited'
+  `, [req.user.id]);
+  const entries = await databaseAll(`
+    SELECT event_id AS "eventId", deposit_id AS "depositId", asset,
+      amount_base_units AS "amountBaseUnits", block_hash AS "blockHash",
+      status, updated_at AS "updatedAt"
+    FROM testnet_ledger_entries
+    WHERE user_id = ?
+    ORDER BY updated_at DESC
+    LIMIT 200
+  `, [req.user.id]);
+  const totals = new Map();
+  for (const entry of creditedEntries) {
+    totals.set(entry.asset, (totals.get(entry.asset) || 0n) + BigInt(entry.amountBaseUnits));
+  }
+  return res.json({
+    network: 'ethereum-sepolia',
+    balances: [...totals].sort(([assetA], [assetB]) => assetA.localeCompare(assetB))
+      .map(([asset, amount]) => ({
+        asset,
+        amountBaseUnits: amount.toString(),
+      })),
+    entries,
+    productionBalanceCredited: false,
+    transfersEnabled: false,
+  });
 });
 
 app.get([...publicPages.keys()], (req, res) => {
