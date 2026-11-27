@@ -986,7 +986,9 @@ app.post(
         accepted: true,
         network: 'ethereum-sepolia',
         ...result,
-        warning: 'Testnet observations only. No account balances are credited and no transactions are sent.',
+        warning: process.env.SEPOLIA_CREDIT_BALANCES === 'true'
+          ? 'Confirmed testnet events credit the separate testnet balance ledger. No production balances are credited and no transactions are sent.'
+          : 'Testnet observations only. Testnet balance credit is disabled and no transactions are sent.',
       });
     } catch (error) {
       await databaseRun('DELETE FROM quicknode_webhook_nonces WHERE nonce = ?', [nonce]);
@@ -1315,6 +1317,8 @@ app.get('/api/monitor/readiness', (_req, res) => {
   const configuration = getMonitorConfiguration();
   const depositsEnabled = configuration.configured
     && process.env.SEPOLIA_DEPOSITS_ENABLED === 'true';
+  const testnetBalanceCreditEnabled =
+    process.env.SEPOLIA_CREDIT_BALANCES === 'true';
   const missing = [...configuration.missing];
   if (configuration.configured && !depositsEnabled) {
     missing.push('SEPOLIA_DEPOSITS_ENABLED');
@@ -1327,6 +1331,7 @@ app.get('/api/monitor/readiness', (_req, res) => {
     missing,
     transfersEnabled: false,
     testnetLedgerEnabled: true,
+    testnetBalanceCreditEnabled,
     productionBalanceCreditEnabled: false,
     monitorMode: process.env.SEPOLIA_MONITOR_MODE?.trim().toLowerCase() === 'rpc'
       ? 'rpc-polling'
@@ -1396,7 +1401,9 @@ app.post('/api/deposits/address', requireSameOrigin, requireUser, async (req, re
         && getMonitorConfiguration().configured
         && process.env.SEPOLIA_DEPOSITS_ENABLED === 'true',
       warning: network === 'Sepolia'
-        ? 'Sepolia testnet only. Confirmed testnet events appear in the separate testnet ledger; no production account balance is credited and no transfers are sent.'
+        ? process.env.SEPOLIA_CREDIT_BALANCES === 'true'
+          ? 'Sepolia testnet only. Confirmed testnet events credit the separate testnet balance ledger. No production account balance is credited and no transfers are sent.'
+          : 'Sepolia testnet only. Confirmed testnet events are observed but testnet balance credit is disabled.'
         : 'Mainnet deposits remain disabled until production monitoring and accounting are verified.',
     });
   } catch (error) {
@@ -1438,6 +1445,7 @@ app.get('/api/deposits/address/:id', requireUser, async (req, res) => {
     monitoringReady: isDepositAddressIssuanceAllowed(process.env, 'Sepolia'),
     observedTestnetEvents: events,
     testnetLedgerEntries: ledgerEntries,
+    testnetBalanceCredited: process.env.SEPOLIA_CREDIT_BALANCES === 'true',
     productionBalanceCredited: false,
   });
 });
@@ -1469,6 +1477,7 @@ app.get('/api/deposits/testnet-ledger', requireUser, async (req, res) => {
         amountBaseUnits: amount.toString(),
       })),
     entries,
+    testnetBalanceCreditEnabled: process.env.SEPOLIA_CREDIT_BALANCES === 'true',
     productionBalanceCredited: false,
     transfersEnabled: false,
   });

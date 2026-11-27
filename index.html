@@ -1153,7 +1153,7 @@
         availableDepositOptions = result.depositOptions || [];
         renderSupportedPaymentOptions(availableDepositOptions);
         if (result.testnetDepositIssuanceEnabled) {
-          help.textContent = 'Sepolia testnet deposits only are enabled. Confirmed events appear in the separate testnet ledger; production deposits and transfers are disabled.';
+          help.textContent = 'Sepolia testnet deposits and balance credit are enabled. Confirmed events credit the separate testnet ledger; production deposits and transfers are disabled.';
         } else if (!depositAddressReady) {
           help.textContent = 'No deposit network is enabled. Sepolia requires its RPC, webhook secret, confirmation count, public EVM key or Turnkey setup, and SEPOLIA_DEPOSITS_ENABLED=true.';
         } else {
@@ -1271,7 +1271,7 @@
                   'A previously observed Sepolia event was reorganized; its testnet ledger credit is reversed.';
               } else if (events.some(event => event.status === 'confirmed')) {
                 document.getElementById('deposit-status').textContent =
-                  'A Sepolia testnet deposit is confirmed and recorded in the testnet ledger. This is not a production balance.';
+                  'A Sepolia testnet deposit is confirmed and credited to the testnet balance ledger. This is not a production balance.';
               } else if (events.some(event => event.status === 'confirming')) {
                 document.getElementById('deposit-status').textContent =
                   'Sepolia testnet deposit detected; waiting for the configured confirmations.';
