@@ -6,11 +6,13 @@ const transferTopic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4
 const signatureToleranceMs = 5 * 60 * 1000;
 
 function getMonitorConfiguration(env = process.env) {
-  const missing = [
-    'SEPOLIA_RPC_URL',
-    'QUICKNODE_STREAMS_SECRET',
-    'SEPOLIA_CONFIRMATIONS',
-  ].filter(name => !env[name]?.trim());
+  const rpcPollMode = env.SEPOLIA_MONITOR_MODE?.trim().toLowerCase() === 'rpc';
+  const missing = [];
+  if (!env.SEPOLIA_RPC_URL?.trim()) missing.push('SEPOLIA_RPC_URL');
+  if (!rpcPollMode && !env.QUICKNODE_STREAMS_SECRET?.trim()) {
+    missing.push('QUICKNODE_STREAMS_SECRET');
+  }
+  if (!env.SEPOLIA_CONFIRMATIONS?.trim()) missing.push('SEPOLIA_CONFIRMATIONS');
   if (env.SEPOLIA_RPC_URL?.trim()) {
     try {
       const rpcUrl = new URL(env.SEPOLIA_RPC_URL);

@@ -15,6 +15,7 @@ const {
   parseSepoliaPayload,
   rpcRequest,
   sepoliaChainId,
+  transferTopic,
   verifyQuickNodeSignature,
 } = require('./deposit-monitor');
 
@@ -798,6 +799,81 @@ async function processSepoliaPayload(payload, env = process.env) {
   };
 }
 
+let sepoliaRpcPollCursor = null;
+let sepoliaRpcPollTimer = null;
+
+async function pollSepoliaRpc(env = process.env) {
+  const configuration = getMonitorConfiguration(env);
+  if (!configuration.configured
+    || env.SEPOLIA_MONITOR_MODE?.trim().toLowerCase() !== 'rpc'
+    || env.SEPOLIA_DEPOSITS_ENABLED !== 'true') {
+    return { skipped: true };
+  }
+
+  const rpcUrl = env.SEPOLIA_RPC_URL.trim();
+  const headResult = await rpcRequest(rpcUrl, 'eth_blockNumber', []);
+  if (typeof headResult !== 'string' || !/^0x[0-9a-f]+$/i.test(headResult)) {
+    throw new Error('Sepolia RPC returned an invalid latest block.');
+  }
+  const head = Number.parseInt(headResult, 16);
+  if (sepoliaRpcPollCursor === null) {
+    sepoliaRpcPollCursor = Math.max(0, head - 20);
+  }
+  const start = Math.min(sepoliaRpcPollCursor, head);
+  const end = head;
+  const logs = [];
+
+  if (Object.keys(configuration.tokens).length > 0) {
+    const contractAddresses = Object.values(configuration.tokens);
+    const rangeSize = 100;
+    for (let rangeStart = start; rangeStart <= end; rangeStart += rangeSize) {
+      const rangeEnd = Math.min(end, rangeStart + rangeSize - 1);
+      const rangeLogs = await rpcRequest(rpcUrl, 'eth_getLogs', [{
+        address: contractAddresses,
+        topics: [transferTopic],
+        fromBlock: `0x${rangeStart.toString(16)}`,
+        toBlock: `0x${rangeEnd.toString(16)}`,
+      }]);
+      if (!Array.isArray(rangeLogs)) {
+        throw new Error('Sepolia RPC returned invalid log data.');
+      }
+      logs.push(...rangeLogs);
+    }
+  }
+
+  const transactions = [];
+  for (let blockNumber = start; blockNumber <= end; blockNumber += 1) {
+    const block = await rpcRequest(
+      rpcUrl,
+      'eth_getBlockByNumber',
+      [`0x${blockNumber.toString(16)}`, true]
+    );
+    if (!block?.hash || !/^0x[0-9a-f]{64}$/i.test(block.hash)
+      || !Array.isArray(block.transactions)) continue;
+    for (const transaction of block.transactions) {
+      if (typeof transaction?.to !== 'string'
+        || typeof transaction.hash !== 'string'
+        || typeof transaction.value !== 'string') continue;
+      const deposit = await findSepoliaDeposit(transaction.to);
+      if (!deposit || deposit.asset !== 'ETH') continue;
+      transactions.push({
+        hash: transaction.hash,
+        to: transaction.to,
+        value: transaction.value,
+        blockHash: block.hash,
+        blockNumber: `0x${blockNumber.toString(16)}`,
+      });
+    }
+  }
+
+  sepoliaRpcPollCursor = end + 1;
+  return processSepoliaPayload({
+    chainId: sepoliaChainId,
+    logs,
+    transactions,
+  }, env);
+}
+
 app.disable('x-powered-by');
 app.use(helmet({
   contentSecurityPolicy: {
@@ -1252,7 +1328,25 @@ app.get('/api/monitor/readiness', (_req, res) => {
     transfersEnabled: false,
     testnetLedgerEnabled: true,
     productionBalanceCreditEnabled: false,
+    monitorMode: process.env.SEPOLIA_MONITOR_MODE?.trim().toLowerCase() === 'rpc'
+      ? 'rpc-polling'
+      : 'quicknode-webhook',
   });
+});
+
+app.post('/api/monitor/poll-sepolia', express.json({ limit: '1kb' }), async (req, res) => {
+  const secret = process.env.SEPOLIA_POLL_SECRET?.trim();
+  const supplied = req.get('authorization')?.replace(/^Bearer\s+/i, '').trim();
+  if (!secret || supplied !== secret) {
+    return res.status(401).json({ error: 'Invalid polling secret.' });
+  }
+  try {
+    const result = await pollSepoliaRpc();
+    return res.json(result);
+  } catch (error) {
+    console.error('Sepolia RPC poll failed:', error.message);
+    return res.status(503).json({ error: 'Sepolia RPC polling failed.' });
+  }
 });
 
 app.get('/api/deposits/options', requireUser, (_req, res) => {
@@ -1409,9 +1503,22 @@ if (require.main === module) {
   const server = app.listen(port, host, () => {
     console.log(`CryptoVault listening on http://${host}:${port}`);
     console.log('Direct deposit addresses are not monitored or credited until chain monitoring is configured.');
+    if (process.env.SEPOLIA_MONITOR_MODE?.trim().toLowerCase() === 'rpc'
+      && process.env.SEPOLIA_DEPOSITS_ENABLED === 'true'
+      && getMonitorConfiguration().configured) {
+      sepoliaRpcPollTimer = setInterval(() => {
+        pollSepoliaRpc().catch(error => {
+          console.error('Sepolia RPC poll failed:', error.message);
+        });
+      }, 60_000);
+      pollSepoliaRpc().catch(error => {
+        console.error('Sepolia RPC poll failed:', error.message);
+      });
+    }
   });
 
   function shutdown() {
+    if (sepoliaRpcPollTimer) clearInterval(sepoliaRpcPollTimer);
     server.close(() => {
       if (sqliteDatabase) sqliteDatabase.close();
       if (postgresPool) postgresPool.end();

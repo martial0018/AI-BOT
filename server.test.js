@@ -258,6 +258,13 @@ test('requires a Sepolia RPC, QuickNode signature secret, and valid confirmation
     QUICKNODE_STREAMS_SECRET: 'test-secret',
     SEPOLIA_CONFIRMATIONS: '12',
   }).configured, false);
+  const rpcPolling = getMonitorConfiguration({
+    SEPOLIA_MONITOR_MODE: 'rpc',
+    SEPOLIA_RPC_URL: 'https://sepolia.example',
+    SEPOLIA_CONFIRMATIONS: '2',
+  });
+  assert.equal(rpcPolling.configured, true);
+  assert.deepEqual(rpcPolling.missing, []);
 });
 
 test('validates QuickNode Streams HMAC, timestamp, and nonce format', () => {
@@ -713,6 +720,13 @@ test('registers accounts and allocates distinct, user-scoped deposit addresses',
     BTC_ACCOUNT_XPUB: process.env.BTC_ACCOUNT_XPUB,
     EVM_ACCOUNT_XPUB: process.env.EVM_ACCOUNT_XPUB,
     TRON_ACCOUNT_XPUB: process.env.TRON_ACCOUNT_XPUB,
+    SEPOLIA_RPC_URL: process.env.SEPOLIA_RPC_URL,
+    SEPOLIA_CONFIRMATIONS: process.env.SEPOLIA_CONFIRMATIONS,
+    SEPOLIA_USDC_CONTRACT: process.env.SEPOLIA_USDC_CONTRACT,
+    SEPOLIA_USDT_CONTRACT: process.env.SEPOLIA_USDT_CONTRACT,
+    SEPOLIA_DEPOSITS_ENABLED: process.env.SEPOLIA_DEPOSITS_ENABLED,
+    SEPOLIA_MONITOR_MODE: process.env.SEPOLIA_MONITOR_MODE,
+    QUICKNODE_STREAMS_SECRET: process.env.QUICKNODE_STREAMS_SECRET,
     NODE_ENV: process.env.NODE_ENV,
   };
   const btcAccount = bip32.fromSeed(Buffer.alloc(32, 17)).derivePath("m/84'/0'/0'");
@@ -721,6 +735,13 @@ test('registers accounts and allocates distinct, user-scoped deposit addresses',
   process.env.BTC_ACCOUNT_XPUB = btcAccount.neutered().toBase58();
   process.env.EVM_ACCOUNT_XPUB = evmAccount.neutered().toBase58();
   process.env.TRON_ACCOUNT_XPUB = tronAccount.neutered().toBase58();
+  delete process.env.SEPOLIA_RPC_URL;
+  delete process.env.SEPOLIA_CONFIRMATIONS;
+  delete process.env.SEPOLIA_USDC_CONTRACT;
+  delete process.env.SEPOLIA_USDT_CONTRACT;
+  delete process.env.SEPOLIA_DEPOSITS_ENABLED;
+  delete process.env.SEPOLIA_MONITOR_MODE;
+  delete process.env.QUICKNODE_STREAMS_SECRET;
   process.env.NODE_ENV = 'test';
 
   const server = app.listen(0, '127.0.0.1');
