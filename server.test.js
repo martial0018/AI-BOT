@@ -11,6 +11,8 @@ const ecc = require('tiny-secp256k1');
 const { deriveSecpAddress, isValidSolanaAddress } = require('./wallet');
 const { deriveTurnkeyEvmAddress } = require('./turnkey');
 const {
+  getEthereumMainnetMonitorConfiguration,
+  parseEthereumMainnetPayload,
   getMonitorConfiguration,
   parseSepoliaPayload,
   transferTopic,
@@ -267,6 +269,30 @@ test('requires a Sepolia RPC, QuickNode signature secret, and valid confirmation
   assert.deepEqual(rpcPolling.missing, []);
 });
 
+test('requires complete mainnet RPC, stream, confirmation, and token configuration', () => {
+  assert.deepEqual(getEthereumMainnetMonitorConfiguration({}).missing, [
+    'ETHEREUM_RPC_URL',
+    'QUICKNODE_MAINNET_STREAMS_SECRET',
+    'ETHEREUM_CONFIRMATIONS',
+  ]);
+  const configured = getEthereumMainnetMonitorConfiguration({
+    ETHEREUM_RPC_URL: 'https://ethereum.example',
+    QUICKNODE_MAINNET_STREAMS_SECRET: 'mainnet-stream-secret',
+    ETHEREUM_CONFIRMATIONS: '12',
+  });
+  assert.equal(configured.configured, true);
+  assert.equal(configured.confirmations, 12);
+  assert.deepEqual(configured.tokens, {
+    USDC: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+    USDT: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+  });
+  assert.throws(() => parseEthereumMainnetPayload({
+    chainId: '0xaa36a7',
+    logs: [],
+    transactions: [],
+  }), /Only Ethereum mainnet/);
+});
+
 test('validates QuickNode Streams HMAC, timestamp, and nonce format', () => {
   const crypto = require('node:crypto');
   const secret = 'test-stream-secret';
@@ -386,6 +412,184 @@ test('authenticates QuickNode deliveries and acknowledges event replays once', a
   assert.equal(duplicate.status, 200);
   assert.deepEqual(await duplicate.json(), { accepted: true, duplicate: true });
   assert.deepEqual(rpcMethods, ['eth_chainId', 'eth_blockNumber']);
+});
+
+test('credits confirmed Ethereum mainnet deposits to a non-spendable ledger and reverses reorgs', async t => {
+  const crypto = require('node:crypto');
+  const names = [
+    'ETHEREUM_RPC_URL',
+    'QUICKNODE_MAINNET_STREAMS_SECRET',
+    'ETHEREUM_CONFIRMATIONS',
+    'ETHEREUM_USDC_CONTRACT',
+    'ETHEREUM_USDT_CONTRACT',
+    'ETHEREUM_MAINNET_DEPOSITS_ENABLED',
+    'ETHEREUM_MAINNET_CREDIT_BALANCES',
+    'EVM_ACCOUNT_XPUB',
+    'NODE_ENV',
+    'VERCEL',
+  ];
+  const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  const previousFetch = global.fetch;
+  const account = bip32.fromSeed(Buffer.alloc(32, 63)).derivePath("m/44'/60'/0'");
+  const secret = 'ethereum-mainnet-test-secret';
+  const usdcContract = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
+  const usdtContract = '0xdAC17F958D2ee523a2206206994597C13D831ec7';
+  const transactionHash = `0x${'a'.repeat(64)}`;
+  const usdcTransactionHash = `0x${'c'.repeat(64)}`;
+  const blockHash = `0x${'b'.repeat(64)}`;
+  const blockNumber = '0x10';
+  process.env.ETHEREUM_RPC_URL = 'https://ethereum.example';
+  process.env.QUICKNODE_MAINNET_STREAMS_SECRET = secret;
+  process.env.ETHEREUM_CONFIRMATIONS = '2';
+  process.env.ETHEREUM_USDC_CONTRACT = usdcContract;
+  process.env.ETHEREUM_USDT_CONTRACT = usdtContract;
+  process.env.ETHEREUM_MAINNET_DEPOSITS_ENABLED = 'true';
+  process.env.ETHEREUM_MAINNET_CREDIT_BALANCES = 'true';
+  process.env.EVM_ACCOUNT_XPUB = account.neutered().toBase58();
+  process.env.NODE_ENV = 'test';
+  delete process.env.VERCEL;
+
+  let ethDeposit;
+  let usdcDeposit;
+  const usdcLog = {
+    address: usdcContract,
+    topics: [
+      transferTopic,
+      `0x${'0'.repeat(24)}${'2'.repeat(40)}`,
+      `0x${'0'.repeat(24)}${'3'.repeat(40)}`,
+    ],
+    data: `0x${'0'.repeat(63)}a`,
+    transactionHash: usdcTransactionHash,
+    blockHash,
+    blockNumber,
+    logIndex: '0x0',
+  };
+  global.fetch = async (_url, options) => {
+    const request = JSON.parse(options.body);
+    const results = {
+      eth_chainId: '0x1',
+      eth_blockNumber: '0x12',
+      eth_getTransactionReceipt: {
+        transactionHash: request.params[0],
+        status: '0x1',
+        blockHash,
+        blockNumber,
+        logs: request.params[0] === usdcTransactionHash ? [usdcLog] : [],
+      },
+      eth_getTransactionByHash: {
+        hash: transactionHash,
+        to: ethDeposit.address,
+        value: '0xde0b6b3a7640000',
+        blockHash,
+        blockNumber,
+      },
+    };
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ jsonrpc: '2.0', id: request.id, result: results[request.method] }),
+    };
+  };
+
+  const server = app.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  t.after(() => {
+    global.fetch = previousFetch;
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const registration = await previousFetch(`${baseUrl}/api/auth/register`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', origin: baseUrl },
+    body: JSON.stringify({
+      email: 'mainnet-ledger-test@example.com',
+      name: 'Mainnet Ledger Test',
+      password: 'a secure password 123',
+      passwordConfirmation: 'a secure password 123',
+    }),
+  });
+  assert.equal(registration.status, 201);
+  const cookie = registration.headers.get('set-cookie').split(';')[0];
+
+  process.env.NODE_ENV = 'production';
+  process.env.VERCEL = '1';
+  const createDeposit = async asset => {
+    const response = await previousFetch(`${baseUrl}/api/deposits/address`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin: baseUrl,
+        cookie,
+      },
+      body: JSON.stringify({ asset, network: 'Ethereum', amountUsdCents: 5000 }),
+    });
+    assert.equal(response.status, 201);
+    const result = await response.json();
+    assert.equal(result.monitoringReady, true);
+    assert.match(result.warning, /non-spendable/);
+    return result;
+  };
+  ethDeposit = await createDeposit('ETH');
+  usdcDeposit = await createDeposit('USDC');
+  process.env.NODE_ENV = 'test';
+  delete process.env.VERCEL;
+  usdcLog.topics[2] =
+    `0x${'0'.repeat(24)}${usdcDeposit.address.slice(2).toLowerCase()}`;
+
+  const webhook = async (payload, nonce) => {
+    const body = JSON.stringify(payload);
+    const timestamp = String(Date.now());
+    const signature = crypto.createHmac('sha256', secret)
+      .update(nonce + timestamp + body)
+      .digest('hex');
+    return previousFetch(`${baseUrl}/api/monitor/quicknode-mainnet`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-qn-nonce': nonce,
+        'x-qn-timestamp': timestamp,
+        'x-qn-signature': signature,
+      },
+      body,
+    });
+  };
+  const payload = {
+    chainId: '0x1',
+    logs: [usdcLog],
+    transactions: [{
+      hash: transactionHash,
+      to: ethDeposit.address,
+      value: '0xde0b6b3a7640000',
+      blockHash,
+      blockNumber,
+    }],
+  };
+  const accepted = await webhook(payload, 'mainnet-test-event-001');
+  assert.equal(accepted.status, 200);
+  const ledger = await previousFetch(`${baseUrl}/api/deposits/ethereum-mainnet-ledger`, {
+    headers: { cookie },
+  });
+  assert.equal(ledger.status, 200);
+  const ledgerBody = await ledger.json();
+  assert.deepEqual(ledgerBody.balances.map(balance => balance.asset), ['ETH', 'USDC']);
+  assert.equal(ledgerBody.balancesSpendable, false);
+  assert.equal(ledgerBody.transfersEnabled, false);
+
+  const removedPayload = {
+    ...payload,
+    logs: [{ ...usdcLog, removed: true }],
+    transactions: [{ ...payload.transactions[0], removed: true }],
+  };
+  const reorged = await webhook(removedPayload, 'mainnet-test-event-002');
+  assert.equal(reorged.status, 200);
+  const afterReorg = await previousFetch(`${baseUrl}/api/deposits/ethereum-mainnet-ledger`, {
+    headers: { cookie },
+  });
+  assert.deepEqual((await afterReorg.json()).balances, []);
 });
 
 test('credits confirmed Sepolia events to a separate ledger and reverses reorged events', async t => {

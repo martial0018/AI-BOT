@@ -658,6 +658,12 @@
             </p>
             <ul id="testnet-deposit-events" class="mt-2 space-y-1 text-xs text-gray-400" aria-live="polite"></ul>
           </div>
+          <div class="mt-3 border-t border-gray-700 pt-3">
+            <p class="text-xs font-medium text-amber-200">Ethereum mainnet verified deposits (non-spendable)</p>
+            <p id="mainnet-ledger-summary" class="mt-1 text-xs text-gray-400" role="status" aria-live="polite">
+              No confirmed Ethereum mainnet deposits.
+            </p>
+          </div>
           <p id="deposit-error" class="hidden text-sm text-red-300 mt-3" role="alert"></p>
         </div>
         <button id="generate-deposit" data-action="generate-deposit-address" class="hidden w-full bg-indigo-600 hover:bg-indigo-500 py-3 rounded-xl font-medium transition disabled:cursor-not-allowed disabled:opacity-50" disabled>
@@ -1059,6 +1065,14 @@
         : 'No confirmed testnet deposits.';
     }
 
+    function renderMainnetLedger(ledger) {
+      const summary = document.getElementById('mainnet-ledger-summary');
+      const balances = Array.isArray(ledger?.balances) ? ledger.balances : [];
+      summary.textContent = balances.length
+        ? balances.map(balance => `${balance.asset}: ${balance.amountBaseUnits} base units`).join(' · ')
+        : 'No confirmed Ethereum mainnet deposits.';
+    }
+
     async function refreshTestnetLedger() {
       try {
         const response = await fetch('/api/deposits/testnet-ledger', { cache: 'no-store' });
@@ -1069,6 +1083,18 @@
       }
     }
 
+    async function refreshMainnetLedger() {
+      try {
+        const response = await fetch('/api/deposits/ethereum-mainnet-ledger', {
+          cache: 'no-store',
+        });
+        if (!response.ok) return;
+        renderMainnetLedger(await response.json());
+      } catch (err) {
+        console.error('Could not refresh the Ethereum mainnet deposit ledger', err);
+      }
+    }
+
     async function refreshTestnetDepositStatus(depositId) {
       const response = await fetch(`/api/deposits/address/${encodeURIComponent(depositId)}`, {
         cache: 'no-store',
@@ -1076,15 +1102,17 @@
       if (!response.ok) throw new Error(`Could not refresh deposit status (${response.status}).`);
       const details = await response.json();
       const list = document.getElementById('testnet-deposit-events');
-      const events = Array.isArray(details.observedTestnetEvents)
-        ? details.observedTestnetEvents
-        : [];
+      const isMainnet = details.network === 'Ethereum';
+      const events = isMainnet
+        ? Array.isArray(details.observedMainnetEvents) ? details.observedMainnetEvents : []
+        : Array.isArray(details.observedTestnetEvents) ? details.observedTestnetEvents : [];
       list.replaceChildren(...events.map(event => {
         const item = document.createElement('li');
         item.textContent = `${event.asset}: ${event.amountBaseUnits} base units · ${event.status} · ${event.confirmations} confirmations`;
         return item;
       }));
-      await refreshTestnetLedger();
+      if (isMainnet) await refreshMainnetLedger();
+      else await refreshTestnetLedger();
       return events;
     }
 
@@ -1152,7 +1180,9 @@
         depositAddressReady = result.addressGenerationReady === true;
         availableDepositOptions = result.depositOptions || [];
         renderSupportedPaymentOptions(availableDepositOptions);
-        if (result.testnetDepositIssuanceEnabled) {
+        if (result.ethereumMainnetDepositIssuanceEnabled) {
+          help.textContent = 'Ethereum mainnet ETH/USDC/USDT deposits credit a separate non-spendable verified-deposit ledger. Trading, transfers, and withdrawals are disabled.';
+        } else if (result.testnetDepositIssuanceEnabled) {
           help.textContent = 'Sepolia testnet deposits and balance credit are enabled. Confirmed events credit the separate testnet ledger; production deposits and transfers are disabled.';
         } else if (!depositAddressReady) {
           help.textContent = 'No deposit network is enabled. Sepolia requires its RPC, webhook secret, confirmation count, public EVM key or Turnkey setup, and SEPOLIA_DEPOSITS_ENABLED=true.';
@@ -1271,10 +1301,14 @@
                   'A previously observed Sepolia event was reorganized; its testnet ledger credit is reversed.';
               } else if (events.some(event => event.status === 'confirmed')) {
                 document.getElementById('deposit-status').textContent =
-                  'A Sepolia testnet deposit is confirmed and credited to the testnet balance ledger. This is not a production balance.';
+                  result.network === 'Ethereum'
+                    ? 'Ethereum mainnet deposit confirmed and recorded to your non-spendable verified-deposit ledger.'
+                    : 'A Sepolia testnet deposit is confirmed and credited to the testnet balance ledger. This is not a production balance.';
               } else if (events.some(event => event.status === 'confirming')) {
                 document.getElementById('deposit-status').textContent =
-                  'Sepolia testnet deposit detected; waiting for the configured confirmations.';
+                  result.network === 'Ethereum'
+                    ? 'Ethereum mainnet deposit detected; waiting for the configured confirmations.'
+                    : 'Sepolia testnet deposit detected; waiting for the configured confirmations.';
               }
             } catch (err) {
               console.error('Could not refresh Sepolia deposit status', err);
@@ -1418,6 +1452,7 @@
     setDepositStep('amount');
     loadDepositAddressConfiguration();
     refreshTestnetLedger();
+    refreshMainnetLedger();
     renderChart('1M');
     render();
     setInterval(render, 60000);

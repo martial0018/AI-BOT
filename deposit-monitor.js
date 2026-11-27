@@ -2,6 +2,11 @@ const crypto = require('node:crypto');
 const { isAddress } = require('ethers');
 
 const sepoliaChainId = 11155111;
+const ethereumMainnetChainId = 1;
+const ethereumMainnetTokens = {
+  USDC: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+  USDT: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+};
 const transferTopic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 const signatureToleranceMs = 5 * 60 * 1000;
 
@@ -76,13 +81,45 @@ function verifyQuickNodeSignature({
   return expected.length === received.length && crypto.timingSafeEqual(expected, received);
 }
 
-function parseSepoliaPayload(payload) {
+function getEthereumMainnetMonitorConfiguration(env = process.env) {
+  const missing = [
+    'ETHEREUM_RPC_URL',
+    'QUICKNODE_MAINNET_STREAMS_SECRET',
+    'ETHEREUM_CONFIRMATIONS',
+  ].filter(name => !env[name]?.trim());
+  if (env.ETHEREUM_RPC_URL?.trim()) {
+    try {
+      const rpcUrl = new URL(env.ETHEREUM_RPC_URL);
+      if (rpcUrl.protocol !== 'https:'
+        && !['localhost', '127.0.0.1'].includes(rpcUrl.hostname)) {
+        missing.push('ETHEREUM_RPC_URL');
+      }
+    } catch {
+      missing.push('ETHEREUM_RPC_URL');
+    }
+  }
+  const confirmations = Number(env.ETHEREUM_CONFIRMATIONS);
+  if (env.ETHEREUM_CONFIRMATIONS?.trim()
+    && (!Number.isSafeInteger(confirmations) || confirmations < 1)) {
+    missing.push('ETHEREUM_CONFIRMATIONS');
+  }
+  return {
+    configured: missing.length === 0,
+    missing: [...new Set(missing)],
+    confirmations: Number.isSafeInteger(confirmations) && confirmations > 0
+      ? confirmations
+      : null,
+    tokens: { ...ethereumMainnetTokens },
+  };
+}
+
+function parseEthereumPayload(payload, expectedChainId, networkName) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     throw new Error('Expected a JSON object payload.');
   }
   const chainId = payload.chainId;
-  if (chainId !== sepoliaChainId && chainId !== '0xaa36a7') {
-    throw new Error('Only Ethereum Sepolia events are accepted.');
+  if (chainId !== expectedChainId && chainId !== `0x${expectedChainId.toString(16)}`) {
+    throw new Error(`Only Ethereum ${networkName} events are accepted.`);
   }
   if (!Array.isArray(payload.logs) || !Array.isArray(payload.transactions)
     || payload.logs.length + payload.transactions.length > 500) {
@@ -124,6 +161,14 @@ function parseSepoliaPayload(payload) {
   return { logs, transactions };
 }
 
+function parseSepoliaPayload(payload) {
+  return parseEthereumPayload(payload, sepoliaChainId, 'Sepolia');
+}
+
+function parseEthereumMainnetPayload(payload) {
+  return parseEthereumPayload(payload, ethereumMainnetChainId, 'mainnet');
+}
+
 async function rpcRequest(url, method, params, fetchImpl = fetch) {
   let endpoint;
   try {
@@ -151,9 +196,12 @@ async function rpcRequest(url, method, params, fetchImpl = fetch) {
 
 module.exports = {
   getMonitorConfiguration,
+  getEthereumMainnetMonitorConfiguration,
+  parseEthereumMainnetPayload,
   parseSepoliaPayload,
   rpcRequest,
   sepoliaChainId,
+  ethereumMainnetChainId,
   transferTopic,
   verifyQuickNodeSignature,
 };
